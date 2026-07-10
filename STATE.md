@@ -3,8 +3,24 @@
 > Living document. Records the plan, decisions, and progress. Update whenever a decision is made,
 > a milestone lands, or scope changes. Newest progress-log entries go on top.
 
-**Status:** v0 complete and verified — app in `app/`, run with `cd app && npm run dev`
+**Status:** v0 + v0.5 complete and verified — app in `app/`, run with `cd app && npm run dev`
+**Repo:** https://github.com/lucyellu/paper-sim (branch `main`)
 **Last updated:** 2026-07-10
+
+## Picking up in a new session
+
+1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
+2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
+3. Verify the world still works: with the dev server running,
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs`
+   (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`).
+4. Next milestone is **v1** (below). The user hasn't picked the first v1 slice yet — top
+   candidates are instruction-sheet export (cheap, differentiating) or the crease-pattern editor.
+5. Local-only, gitignored (not on GitHub): `reference/` (234 MB Pinterest inspiration + GUI art
+   direction), `PackCAD_screenshot*.png` (UX reference), `paperstar.jpg`, `assets/`,
+   `app/scripts/shots/`. They exist only on this machine — don't rely on them being in the repo.
+6. Dev-only test hooks: `window.paperSim` (store, toFoldFile/fromFoldFile) and
+   `window.paperSimViewer` (gizmo, views) — used by the verify scripts.
 
 ---
 
@@ -154,6 +170,9 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
 
 *(newest first)*
 
+- **2026-07-10** — **Pushed to GitHub**: https://github.com/lucyellu/paper-sim (initial commit on
+  `main`; source + docs only, heavy/private reference media gitignored). Added "Picking up in a
+  new session" section above.
 - **2026-07-10** — **v0.5 UX round built and verified** (user feedback after first session):
   timeline notches + step re-edit/continue actions, F-to-frame, suggested-angle preset tinting
   driven by new `targetAngles` dieline metadata (persisted as `paperSim:targetAngles`),
