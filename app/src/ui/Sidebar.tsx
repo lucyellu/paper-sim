@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { nextExportName } from '../model/naming'
 import { selectedHinge, selectedHinges, useAppStore, type AppState } from '../state/store'
-import { dielineSVG, downloadText, openInstructionSheet } from './exports'
+import { dielineSVG, downloadText, exportProjectBundle, openInstructionSheet } from './exports'
 
 export function Sidebar() {
   const s = useAppStore()
@@ -55,7 +56,20 @@ export function Sidebar() {
             onChange={onLoadFile}
           />
         </div>
-        <div className="file-name">{s.fileName}</div>
+        <label className="project-name-row">
+          <span>Project</span>
+          <input
+            type="text"
+            className="project-name"
+            key={s.projectName}
+            defaultValue={s.projectName}
+            title="Project name — exports are named projectname_dieline_001 etc."
+            onBlur={(e) => s.setProjectName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+            }}
+          />
+        </label>
       </section>
 
       <section>
@@ -328,14 +342,19 @@ function ObjectControl() {
 
 function ExportPanel() {
   const s = useAppStore()
-  const baseName = s.fileName.replace(/\.fold$/, '')
   return (
     <section>
       <h3>Export</h3>
       <div className="btn-row">
         <button
           title="Download the flat dieline as an SVG (cuts solid, folds dashed)"
-          onClick={() => downloadText(dielineSVG(s.doc), `${baseName}-dieline.svg`, 'image/svg+xml')}
+          onClick={() =>
+            downloadText(
+              dielineSVG(s.doc),
+              nextExportName(s.projectName, 'dieline', 'svg'),
+              'image/svg+xml',
+            )
+          }
         >
           Dieline SVG
         </button>
@@ -343,7 +362,7 @@ function ExportPanel() {
           title="Open a printable sheet: dieline + numbered snapshots of each fold step"
           onClick={() => {
             const state = useAppStore.getState() as AppState
-            if (!openInstructionSheet(state.doc, state.steps, baseName)) {
+            if (!openInstructionSheet(state.doc, state.steps, state.projectName)) {
               alert('Record at least one keyframe first — the sheet shows one image per step.')
             }
           }}
@@ -351,6 +370,18 @@ function ExportPanel() {
           Instruction sheet
         </button>
       </div>
+      <div className="btn-row">
+        <button
+          title="Download everything as a zip: .fold project, dieline SVG, 3D snapshot, and instruction sheet"
+          onClick={() => exportProjectBundle(useAppStore.getState() as AppState)}
+        >
+          Export project (zip)
+        </button>
+      </div>
+      <p className="hint">
+        Files are numbered per project (e.g. <i>carton_dieline_001.svg</i>) so repeat exports never
+        overwrite. The zip unpacks into a project-name folder.
+      </p>
     </section>
   )
 }

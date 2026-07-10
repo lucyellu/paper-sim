@@ -9,6 +9,9 @@ npm install
 npm run dev     # http://localhost:5173
 ```
 
+Or double-click `..\launch-paper-sim.cmd` (the "Paper Sim" desktop shortcut points at it) — it
+starts the dev server if it isn't running and opens the app in the browser.
+
 ## Use
 
 - **New: Box / New: Milk carton** — starter dielines. The milk carton is a gable-top with the
@@ -27,9 +30,13 @@ npm run dev     # http://localhost:5173
   lines; drawing across a panel splits it), delete lines between panels (merges them), click a
   line to retype it (cut ↔ crease) or set its target angle, drag points to move them. All edits
   are undoable history ops.
+- **Project name** (File section) names your work; fold steps can be renamed in the steps list.
+  Exports are numbered per project — `carton_dieline_001.svg`, `_002`, … — so nothing overwrites.
 - **Export** — *Dieline SVG* downloads the flat pattern (cuts solid, valley/mountain dashed);
   *Instruction sheet* opens a printable page with the dieline plus one numbered 3D snapshot per
-  fold step (print to PDF from the browser).
+  fold step (print to PDF from the browser); *Export project (zip)* downloads everything — a
+  `projectname/` folder with the `.fold` file (model + history), dieline SVG, a snapshot of the
+  current pose, and the instruction sheet.
 - **F** frames the selected panel in all views; with nothing selected it frames the whole model.
 - **Add Keyframe** records the current pose as the next fold step. The timeline shows a numbered
   notch per step — click one to select it, then ✎ re-edit (re-record) or ⏵ continue after it.
@@ -55,6 +62,7 @@ node scripts/verify-v2.mjs     # timeline notches, history panel surgery, quad v
 node scripts/verify-v3.mjs     # gable closure math, group folds, dieline editing, FOLD import
 node scripts/repro-crash.mjs   # step re-edit / history-surgery stress (duplicate-id regression)
 node scripts/check-sheet.mjs   # instruction-sheet popup + group-fold UI
+node scripts/check-exports.mjs # numbered export names, project bundle zip, name round-trip
 node scripts/shoot-v3.mjs      # visual pass: carton fold sequence + editor screenshots
 ```
 

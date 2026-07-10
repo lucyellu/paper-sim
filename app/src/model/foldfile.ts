@@ -17,6 +17,7 @@ export interface ObjectRotationData {
 export interface SaveFile {
   file_spec: number
   file_creator: string
+  file_title?: string
   file_classes: string[]
   frame_classes: string[]
   vertices_coords: [number, number][]
@@ -40,6 +41,7 @@ export function toFoldFile(
   steps: Step[],
   history: HistoryData,
   objectRotation?: ObjectRotationData,
+  projectName?: string,
 ): SaveFile {
   const vIndex = new Map<number, number>()
   doc.vertices.forEach((v, i) => vIndex.set(v.id, i))
@@ -57,6 +59,7 @@ export function toFoldFile(
   return {
     file_spec: 1.1,
     file_creator: 'PaperSim v1',
+    file_title: projectName,
     file_classes: ['singleModel'],
     frame_classes: ['creasePattern'],
     vertices_coords: doc.vertices.map((v) => [v.pos.x, v.pos.y]),
@@ -87,6 +90,8 @@ export interface LoadedFile {
   angles: Record<number, number>
   steps: Step[]
   objectRotation: ObjectRotationData
+  /** file_title if the file carries one; the loader falls back to the file name. */
+  projectName?: string
 }
 
 export function fromFoldFile(json: unknown): LoadedFile {
@@ -143,6 +148,7 @@ function fromPaperSimFile(f: SaveFile): LoadedFile {
     angles: state.angles,
     steps: state.steps,
     objectRotation: f['paperSim:objectRotation'] ?? { x: 0, y: 0, z: 0 },
+    projectName: f.file_title,
   }
 }
 
@@ -210,5 +216,6 @@ function fromForeignFold(f: Partial<SaveFile>): LoadedFile {
     angles: {},
     steps: [],
     objectRotation: { x: 0, y: 0, z: 0 },
+    projectName: typeof f.file_title === 'string' && f.file_title ? f.file_title : undefined,
   }
 }

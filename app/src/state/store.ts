@@ -3,6 +3,7 @@ import { buildCarton } from '../model/carton'
 import { buildGableCarton } from '../model/gable'
 import { buildPanelTree, type PanelTree, type PaperDoc } from '../model/document'
 import { fromFoldFile, toFoldFile } from '../model/foldfile'
+import { nextExportName, projectNameFromFileName } from '../model/naming'
 import {
   applyOp,
   cloneEditable,
@@ -46,7 +47,8 @@ export interface AppState {
   /** Selected face ids; the LAST one is the primary selection. */
   selection: number[]
   playback: Playback
-  fileName: string
+  /** User-facing project name; drives export file names (slugified). */
+  projectName: string
   theme: Theme
   viewLayout: ViewLayout
   editorMode: EditorMode
@@ -67,6 +69,7 @@ export interface AppState {
   /** Re-record step `index`: delete it and later steps, keeping its pose to adjust. */
   editStepInPlace: (index: number) => void
   renameStep: (stepId: string, name: string) => void
+  setProjectName: (name: string) => void
   setScrub: (t: number) => void
   setPlaying: (playing: boolean) => void
   enterEditMode: () => void
@@ -123,7 +126,7 @@ export const useAppStore = create<AppState>((set, get) => {
     history: { base: emptyEditable(), log: [], cursor: 0 },
     selection: [],
     playback: { mode: 'edit' },
-    fileName: 'untitled.fold',
+    projectName: 'box',
     theme: readPref<Theme>('paperSim.theme', 'light', ['light', 'dark']),
     viewLayout: readPref<ViewLayout>('paperSim.layout', 'single', ['single', 'quad']),
     editorMode: '3d',
@@ -243,6 +246,11 @@ export const useAppStore = create<AppState>((set, get) => {
       s.dispatch({ type: 'renameStep', stepId, prev: step.name, next: name })
     },
 
+    setProjectName: (name) => {
+      const trimmed = name.trim()
+      if (trimmed) set({ projectName: trimmed })
+    },
+
     setScrub: (t) => {
       const s = get()
       const n = s.steps.length
@@ -337,7 +345,7 @@ export const useAppStore = create<AppState>((set, get) => {
         history: { base: emptyEditable(), log: [], cursor: 0 },
         selection: [],
         playback: { mode: 'edit' },
-        fileName: 'untitled.fold',
+        projectName: template === 'gable' ? 'milk carton' : 'box',
         objectRotation: { x: 0, y: 0, z: 0 },
         editorMode: '3d',
       })
@@ -345,12 +353,12 @@ export const useAppStore = create<AppState>((set, get) => {
 
     saveFile: () => {
       const s = get()
-      const file = toFoldFile(s.doc, s.angles, s.steps, s.history, s.objectRotation)
+      const file = toFoldFile(s.doc, s.angles, s.steps, s.history, s.objectRotation, s.projectName)
       const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = s.fileName
+      a.download = nextExportName(s.projectName, '', 'fold')
       a.click()
       URL.revokeObjectURL(url)
     },
@@ -366,7 +374,7 @@ export const useAppStore = create<AppState>((set, get) => {
         history: loaded.history,
         selection: [],
         playback: { mode: 'edit' },
-        fileName,
+        projectName: loaded.projectName ?? projectNameFromFileName(fileName),
         objectRotation: loaded.objectRotation,
         editorMode: '3d',
       })

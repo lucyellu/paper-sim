@@ -1,9 +1,14 @@
-// Export helpers: dieline SVG (cut/crease line work) and the printable
-// instruction sheet (dieline + numbered 3D snapshots per fold step).
+// Export helpers: dieline SVG (cut/crease line work), the printable
+// instruction sheet (dieline + numbered 3D snapshots per fold step), and the
+// project bundle (zip with the .fold, dieline, model snapshot, instructions).
 
 import { sheetBounds, type PaperDoc } from '../model/document'
+import { toFoldFile } from '../model/foldfile'
+import { nextExportName, slugify } from '../model/naming'
 import type { Step } from '../model/ops'
-import { capturePoses } from '../viewer/capture'
+import { getDisplayAngles, type AppState } from '../state/store'
+import { captureAvailable, capturePoses } from '../viewer/capture'
+import { buildZip, dataUrlBytes, type ZipEntry } from './zip'
 
 /** Build a standalone SVG string of the dieline (cuts solid, creases dashed). */
 export function dielineSVG(doc: PaperDoc): string {
@@ -31,7 +36,10 @@ ${lines}
 }
 
 export function downloadText(text: string, fileName: string, mime: string): void {
-  const blob = new Blob([text], { type: mime })
+  downloadBlob(new Blob([text], { type: mime }), fileName)
+}
+
+export function downloadBlob(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -41,12 +49,15 @@ export function downloadText(text: string, fileName: string, mime: string): void
 }
 
 /**
- * Render the instruction sheet: flat start + one snapshot per step, plus the
- * dieline, as a printable HTML page opened in a new tab (print to PDF from
- * there). Returns false if there are no steps to export.
+ * The instruction sheet as a self-contained HTML string (snapshots inlined as
+ * data URLs), or null if there are no steps to show.
  */
-export function openInstructionSheet(doc: PaperDoc, steps: Step[], title: string): boolean {
-  if (steps.length === 0) return false
+export function buildInstructionSheetHTML(
+  doc: PaperDoc,
+  steps: Step[],
+  title: string,
+): string | null {
+  if (steps.length === 0) return null
   const poses = [{}, ...steps.map((st) => st.angles)]
   const images = capturePoses(poses)
   const svg = dielineSVG(doc)
@@ -61,7 +72,7 @@ export function openInstructionSheet(doc: PaperDoc, steps: Step[], title: string
     })
     .join('\n')
 
-  const html = `<!doctype html>
+  return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(title)} — folding instructions</title>
 <style>
   body { font-family: Georgia, 'Times New Roman', serif; color: #3b3327; background: #fffdf7;
@@ -92,12 +103,45 @@ export function openInstructionSheet(doc: PaperDoc, steps: Step[], title: string
 ${cards}
   </div>
 </body></html>`
+}
 
+/**
+ * Render the instruction sheet as a printable page opened in a new tab (print
+ * to PDF from there). Returns false if there are no steps to export.
+ */
+export function openInstructionSheet(doc: PaperDoc, steps: Step[], title: string): boolean {
+  const html = buildInstructionSheetHTML(doc, steps, title)
+  if (html === null) return false
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
   window.open(url, '_blank')
   // Give the new tab time to load before revoking.
   setTimeout(() => URL.revokeObjectURL(url), 30_000)
   return true
+}
+
+/**
+ * Download the whole project as a zip: a projectname/ folder holding the
+ * .fold file (model + full history), the dieline SVG, a snapshot of the
+ * current 3D pose, and the instruction sheet (when there are steps). The zip
+ * name iterates per project so exports never overwrite each other.
+ * Returns the file name it downloaded as.
+ */
+export function exportProjectBundle(s: AppState): string {
+  const slug = slugify(s.projectName)
+  const fold = toFoldFile(s.doc, s.angles, s.steps, s.history, s.objectRotation, s.projectName)
+  const entries: ZipEntry[] = [
+    { name: `${slug}/${slug}.fold`, data: JSON.stringify(fold, null, 2) },
+    { name: `${slug}/${slug}_dieline.svg`, data: dielineSVG(s.doc) },
+  ]
+  if (captureAvailable()) {
+    const png = capturePoses([getDisplayAngles(s)], { w: 1200, h: 900 })[0]
+    entries.push({ name: `${slug}/${slug}_model.png`, data: dataUrlBytes(png) })
+    const sheet = buildInstructionSheetHTML(s.doc, s.steps, s.projectName)
+    if (sheet) entries.push({ name: `${slug}/${slug}_instructions.html`, data: sheet })
+  }
+  const zipName = nextExportName(s.projectName, 'project', 'zip')
+  downloadBlob(buildZip(entries), zipName)
+  return zipName
 }
 
 function escapeHtml(s: string): string {

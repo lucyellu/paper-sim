@@ -183,6 +183,17 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
 
 *(newest first)*
 
+- **2026-07-10 (later)** — **Projects & exports round**: project name field (persists as FOLD
+  `file_title`, falls back to the file name on load), step renaming (already in v1 slice; kept),
+  per-project iterated export names via localStorage counters (`carton_dieline_001.svg`, `_002`…,
+  `carton_001.fold` — nothing ever overwrites), "Export project (zip)" bundle — dependency-free
+  store-method zip writer (`ui/zip.ts`) packing a `projectname/` folder with the `.fold`
+  (model + full history), dieline SVG, current-pose PNG snapshot, and the instruction-sheet HTML
+  (snapshots inlined as data URLs). Desktop launcher: `launch-paper-sim.cmd` (starts dev server
+  if down, waits, opens browser) + generated `paper-sim.ico` + a "Paper Sim" shortcut on the
+  Desktop (shortcut itself is machine-local, not in the repo). New verify:
+  `scripts/check-exports.mjs` (download names iterate, zip entries correct + extractable by
+  Windows, project-name round-trip). All seven verify scripts pass.
 - **2026-07-10** — **First v1 slice built and verified** (user request round after milk-carton
   session): gable-top milk carton template (square base; spout gusset diagonals; all 22 hinge
   targets derived from the sealed pose via dihedral math — closure verified numerically to ~1e-3),
