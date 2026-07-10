@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAppStore } from './state/store'
 import { DetailsPanel } from './ui/DetailsPanel'
+import { PatternEditor } from './ui/PatternEditor'
 import { PatternInset } from './ui/PatternInset'
 import { Sidebar } from './ui/Sidebar'
 import { Timeline } from './ui/Timeline'
@@ -9,6 +10,7 @@ import { ThreeView } from './viewer/ThreeView'
 
 export default function App() {
   const theme = useAppStore((s) => s.theme)
+  const editorMode = useAppStore((s) => s.editorMode)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement
@@ -32,8 +34,9 @@ export default function App() {
       <Sidebar />
       <div className="main">
         <ThreeView />
+        {editorMode === 'pattern' && <PatternEditor />}
         <ViewBar />
-        <PatternInset />
+        {editorMode === '3d' && <PatternInset />}
         <Timeline />
       </div>
       <DetailsPanel />

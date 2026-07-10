@@ -1,6 +1,5 @@
-import { faceById } from '../model/document'
 import { isDeformerOp } from '../model/ops'
-import { describeOp, selectedHinge, useAppStore } from '../state/store'
+import { describeOp, primaryFaceId, selectedHinge, useAppStore } from '../state/store'
 
 /** Right-hand panel: selection details + full action history (Maya-style). */
 export function DetailsPanel() {
@@ -105,21 +104,25 @@ export function DetailsPanel() {
 
 function SelectionDetails() {
   const s = useAppStore()
-  if (s.selectedFaceId === null) {
+  const fid = primaryFaceId(s)
+  const face = fid !== null ? s.doc.faces.find((f) => f.id === fid) : undefined
+  if (fid === null || !face) {
     return <p className="hint">Nothing selected. Click a panel; press F to frame it.</p>
   }
-  const face = faceById(s.doc, s.selectedFaceId)
-  const node = s.tree.nodes.get(s.selectedFaceId)
+  const node = s.tree.nodes.get(fid)
   const hinge = selectedHinge(s)
   const parent =
     node?.parentFaceId !== null && node?.parentFaceId !== undefined
-      ? faceById(s.doc, node.parentFaceId).name
+      ? (s.doc.faces.find((f) => f.id === node.parentFaceId)?.name ?? null)
       : null
   const target = hinge !== null ? s.doc.targetAngles?.[hinge] : undefined
   return (
     <dl className="detail-list">
       <dt>Panel</dt>
-      <dd>{face.name}</dd>
+      <dd>
+        {face.name}
+        {s.selection.length > 1 ? ` (+${s.selection.length - 1} more)` : ''}
+      </dd>
       <dt>Role</dt>
       <dd>{parent === null ? 'root (fixed)' : `folds off "${parent}"`}</dd>
       {hinge !== null && (

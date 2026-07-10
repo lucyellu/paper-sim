@@ -3,7 +3,7 @@
 > Living document. Records the plan, decisions, and progress. Update whenever a decision is made,
 > a milestone lands, or scope changes. Newest progress-log entries go on top.
 
-**Status:** v0 + v0.5 complete and verified — app in `app/`, run with `cd app && npm run dev`
+**Status:** v0 + v0.5 + first v1 slice complete and verified — app in `app/`, run with `cd app && npm run dev`
 **Repo:** https://github.com/lucyellu/paper-sim (branch `main`)
 **Last updated:** 2026-07-10
 
@@ -12,10 +12,11 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs`
-   (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`).
-4. Next milestone is **v1** (below). The user hasn't picked the first v1 slice yet — top
-   candidates are instruction-sheet export (cheap, differentiating) or the crease-pattern editor.
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs`
+   (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
+   `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
+4. Next: remaining **v1** items (below) — SVG dieline import, per-hinge limits, materials,
+   animation export, model library, per-object history, micro-crease fans, cozy UI pass.
 5. Local-only, gitignored (not on GitHub): `reference/` (234 MB Pinterest inspiration + GUI art
    direction), `PackCAD_screenshot*.png` (UX reference), `paperstar.jpg`, `assets/`,
    `app/scripts/shots/`. They exist only on this machine — don't rely on them being in the repo.
@@ -135,12 +136,24 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
       "Delete non-deformer" (renames; Maya-style distinction) and "Delete all (bake)"
 
 ### v1 — Authoring + export
-- [ ] Crease-pattern / dieline editor (draw cuts + creases on flat sheet); SVG import
+- [x] Crease-pattern / dieline editor (draw cuts + creases, delete/merge, retype, set target
+      angle, move points; edits are undoable `setDoc` history ops) — 2026-07-10
+- [ ]   … SVG dieline import (still open; generic FOLD import IS done)
+- [x] Generic FOLD import: Load accepts files from other tools (largest face = root,
+      `edges_foldAngle` → target angles) — 2026-07-10
+- [x] Gable-top milk carton template with spout gusset creases; target angles derived from the
+      sealed 3D pose (`model/gable.ts` + `model/targets.ts` dihedral math) — 2026-07-10
+- [x] Group folding: Ctrl+click multi-select; 0–100% "fold toward targets" slider; gizmo drives
+      the whole group proportionally (`setAngles` op) — 2026-07-10
+- [x] Whole-object rotation (Object section, 90° steps) + auto-centering pivot (bbox centered on
+      origin, resting on ground; frozen during gizmo drags) — 2026-07-10
+- [x] Instruction-sheet export (printable page: dieline + numbered snapshots per step; offscreen
+      renders via `viewer/capture.ts`) — fold arrows still TODO — 2026-07-10
+- [x] Dieline SVG export (cuts solid, valley/mountain dashed) — 2026-07-10
 - [ ] Per-hinge angle limits (basic constraints)
 - [ ] Materials: paper color/texture both sides, artwork mapping
-- [ ] Instruction-sheet export (numbered snapshots + fold arrows, SVG/PDF)
 - [ ] Animation export (GIF/MP4)
-- [ ] Starter model library from `reference/` (carton, gift box, cup, boat, peacock…)
+- [ ] Starter model library from `reference/` (gift box, cup, boat, peacock…)
 - [ ] History panel: per-object filtered op list, per-object Delete History (compaction)
 - [ ] Micro-crease fan tool (approximate curved bends) — unlocks the lucky star
 - [ ] Cozy UI pass per `reference/GUI/`
@@ -169,6 +182,22 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
 ## Progress log
 
 *(newest first)*
+
+- **2026-07-10** — **First v1 slice built and verified** (user request round after milk-carton
+  session): gable-top milk carton template (square base; spout gusset diagonals; all 22 hinge
+  targets derived from the sealed pose via dihedral math — closure verified numerically to ~1e-3),
+  Ctrl+click group folding (`setAngles` op; % slider + gizmo drives group), dieline editor mode
+  (draw/delete/retype/move lines; face split/merge; undoable `setDoc` ops carrying full doc
+  snapshots, replayed through history — `baseDoc` tracks the pre-history dieline), whole-object
+  rotation + auto-centering ground-rest pivot, generic FOLD import, dieline SVG export,
+  instruction-sheet export (printable HTML; offscreen WebGL captures per step).
+  **Crash fix**: step re-edit + history surgery + undo/redo could duplicate step IDs (React
+  duplicate-key → broken steps UI, matches user's crash report); `applyOp`/`revertOp` now dedupe
+  by step id. New scripts: `verify-v3.mjs` (closure math, editing, import, regression),
+  `repro-crash.mjs`, `check-sheet.mjs`, `shoot-v3.mjs`; all verify scripts take `PAPERSIM_URL`.
+  Deferred from this round: fold arrows on the instruction sheet, SVG dieline import, free-angle
+  object rotation (only 90° steps), and a kinematic coupling solver (group folds are
+  target-proportional, not constraint-solved).
 
 - **2026-07-10** — **Pushed to GitHub**: https://github.com/lucyellu/paper-sim (initial commit on
   `main`; source + docs only, heavy/private reference media gitignored). Added "Picking up in a

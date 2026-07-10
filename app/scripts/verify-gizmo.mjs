@@ -7,7 +7,7 @@ const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1600, height: 950 } })
 const errors = []
 page.on('pageerror', (e) => errors.push(String(e)))
-await page.goto('http://localhost:5173/')
+await page.goto(process.env.PAPERSIM_URL ?? 'http://localhost:5173/')
 await page.waitForFunction(() => 'paperSim' in window && 'paperSimViewer' in window)
 await page.waitForTimeout(800)
 

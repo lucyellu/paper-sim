@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { buildCarton } from '../model/carton'
+import { buildGableCarton } from '../model/gable'
 import { buildPanelTree, type PanelTree, type PaperDoc } from '../model/document'
 import { fromFoldFile, toFoldFile } from '../model/foldfile'
 import {
@@ -10,6 +11,7 @@ import {
   newStepId,
   replay,
   revertOp,
+  type EditableState,
   type HistoryData,
   type Op,
   type Step,
@@ -18,6 +20,13 @@ import {
 export type Playback = { mode: 'edit' } | { mode: 'scrub'; t: number; playing: boolean }
 export type Theme = 'light' | 'dark'
 export type ViewLayout = 'single' | 'quad'
+export type EditorMode = '3d' | 'pattern'
+export type Template = 'tuck' | 'gable'
+export interface ObjectRotation {
+  x: number
+  y: number
+  z: number
+}
 
 function readPref<T extends string>(key: string, fallback: T, valid: T[]): T {
   if (typeof window === 'undefined') return fallback
@@ -28,23 +37,30 @@ function readPref<T extends string>(key: string, fallback: T, valid: T[]): T {
 export interface AppState {
   doc: PaperDoc
   tree: PanelTree
+  /** The dieline as of the history base (setDoc ops replay from here). */
+  baseDoc: PaperDoc
   /** Working hinge angles at the edit head, degrees. */
   angles: Record<number, number>
   steps: Step[]
   history: HistoryData
-  selectedFaceId: number | null
+  /** Selected face ids; the LAST one is the primary selection. */
+  selection: number[]
   playback: Playback
   fileName: string
   theme: Theme
   viewLayout: ViewLayout
+  editorMode: EditorMode
+  /** Whole-object orientation in the 3D view, degrees (XYZ euler). */
+  objectRotation: ObjectRotation
 
   dispatch: (op: Op, opts?: { alreadyApplied?: boolean }) => void
   setAngleTransient: (edgeId: number, deg: number) => void
+  setAnglesTransient: (angles: Record<number, number>) => void
   undo: () => void
   redo: () => void
   canUndo: () => boolean
   canRedo: () => boolean
-  selectFace: (id: number | null) => void
+  selectFace: (id: number | null, additive?: boolean) => void
   addKeyframe: () => void
   /** Truncate steps after `index` and continue editing from that state. -1 = flat. */
   editFromStep: (index: number) => void
@@ -63,38 +79,61 @@ export interface AppState {
   deleteNonDeformerOps: () => void
   setTheme: (theme: Theme) => void
   setViewLayout: (layout: ViewLayout) => void
-  newDocument: () => void
+  setEditorMode: (mode: EditorMode) => void
+  setObjectRotation: (rot: ObjectRotation) => void
+  rotateObject: (axis: keyof ObjectRotation, deltaDeg: number) => void
+  newDocument: (template?: Template) => void
   saveFile: () => void
   loadFile: (json: unknown, fileName: string) => void
 }
 
-function freshDoc(): { doc: PaperDoc; tree: PanelTree } {
-  const doc = buildCarton()
-  return { doc, tree: buildPanelTree(doc) }
+function buildTemplate(template: Template): PaperDoc {
+  return template === 'gable' ? buildGableCarton() : buildCarton()
 }
 
 export const useAppStore = create<AppState>((set, get) => {
-  const initial = freshDoc()
+  const initialDoc = buildTemplate('tuck')
+
+  /** Editable slice of the current state (what ops act on). */
+  function editable(): EditableState {
+    const s = get()
+    return { angles: s.angles, steps: s.steps, doc: s.doc }
+  }
+
+  /** Turn an op-result EditableState into a store update (handles doc edits). */
+  function fromEditable(next: EditableState, fallbackDoc?: PaperDoc) {
+    const s = get()
+    const doc = next.doc ?? fallbackDoc ?? s.doc
+    if (doc === s.doc) return { angles: next.angles, steps: next.steps }
+    return {
+      angles: next.angles,
+      steps: next.steps,
+      doc,
+      tree: buildPanelTree(doc),
+      selection: s.selection.filter((id) => doc.faces.some((f) => f.id === id)),
+    }
+  }
+
   return {
-    doc: initial.doc,
-    tree: initial.tree,
+    doc: initialDoc,
+    tree: buildPanelTree(initialDoc),
+    baseDoc: initialDoc,
     angles: {},
     steps: [],
     history: { base: emptyEditable(), log: [], cursor: 0 },
-    selectedFaceId: null,
+    selection: [],
     playback: { mode: 'edit' },
     fileName: 'untitled.fold',
     theme: readPref<Theme>('paperSim.theme', 'light', ['light', 'dark']),
     viewLayout: readPref<ViewLayout>('paperSim.layout', 'single', ['single', 'quad']),
+    editorMode: '3d',
+    objectRotation: { x: 0, y: 0, z: 0 },
 
     dispatch: (op, opts) => {
       const s = get()
-      const next = opts?.alreadyApplied
-        ? { angles: s.angles, steps: s.steps }
-        : applyOp({ angles: s.angles, steps: s.steps }, op)
+      const next = opts?.alreadyApplied ? editable() : applyOp(editable(), op)
       set({
-        angles: next.angles,
-        steps: next.steps,
+        ...fromEditable(next),
         history: {
           base: s.history.base,
           log: [...s.history.log.slice(0, s.history.cursor), op],
@@ -109,14 +148,19 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ angles: { ...s.angles, [edgeId]: deg } })
     },
 
+    setAnglesTransient: (angles) => {
+      const s = get()
+      if (s.playback.mode !== 'edit') return
+      set({ angles: { ...s.angles, ...angles } })
+    },
+
     undo: () => {
       const s = get()
       if (s.history.cursor === 0) return
       const op = s.history.log[s.history.cursor - 1]
-      const next = revertOp({ angles: s.angles, steps: s.steps }, op)
+      const next = revertOp(editable(), op)
       set({
-        angles: next.angles,
-        steps: next.steps,
+        ...fromEditable(next),
         history: { ...s.history, cursor: s.history.cursor - 1 },
         playback: { mode: 'edit' },
       })
@@ -126,10 +170,9 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get()
       if (s.history.cursor >= s.history.log.length) return
       const op = s.history.log[s.history.cursor]
-      const next = applyOp({ angles: s.angles, steps: s.steps }, op)
+      const next = applyOp(editable(), op)
       set({
-        angles: next.angles,
-        steps: next.steps,
+        ...fromEditable(next),
         history: { ...s.history, cursor: s.history.cursor + 1 },
         playback: { mode: 'edit' },
       })
@@ -138,7 +181,20 @@ export const useAppStore = create<AppState>((set, get) => {
     canUndo: () => get().history.cursor > 0,
     canRedo: () => get().history.cursor < get().history.log.length,
 
-    selectFace: (id) => set({ selectedFaceId: id }),
+    selectFace: (id, additive) => {
+      const s = get()
+      if (id === null) {
+        set({ selection: [] })
+        return
+      }
+      if (!additive) {
+        set({ selection: [id] })
+        return
+      }
+      // Additive: toggle membership; newly added becomes primary (last).
+      const without = s.selection.filter((f) => f !== id)
+      set({ selection: without.length === s.selection.length ? [...s.selection, id] : without })
+    },
 
     addKeyframe: () => {
       const s = get()
@@ -208,6 +264,7 @@ export const useAppStore = create<AppState>((set, get) => {
     deleteHistory: () => {
       const s = get()
       set({
+        baseDoc: s.doc,
         history: {
           base: cloneEditable({ angles: s.angles, steps: s.steps }),
           log: [],
@@ -222,7 +279,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (clamped === s.history.cursor) return
       const history = { ...s.history, cursor: clamped }
       const state = replay(history)
-      set({ angles: state.angles, steps: state.steps, history, playback: { mode: 'edit' } })
+      set({ ...fromEditable(state, s.baseDoc), history, playback: { mode: 'edit' } })
     },
 
     deleteOpAt: (index) => {
@@ -232,7 +289,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const cursor = s.history.cursor > index ? s.history.cursor - 1 : s.history.cursor
       const history = { base: s.history.base, log, cursor }
       const state = replay(history)
-      set({ angles: state.angles, steps: state.steps, history, playback: { mode: 'edit' } })
+      set({ ...fromEditable(state, s.baseDoc), history, playback: { mode: 'edit' } })
     },
 
     deleteNonDeformerOps: () => {
@@ -245,7 +302,7 @@ export const useAppStore = create<AppState>((set, get) => {
       })
       const history = { base: s.history.base, log, cursor }
       const state = replay(history)
-      set({ angles: state.angles, steps: state.steps, history, playback: { mode: 'edit' } })
+      set({ ...fromEditable(state, s.baseDoc), history, playback: { mode: 'edit' } })
     },
 
     setTheme: (theme) => {
@@ -258,23 +315,37 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ viewLayout: layout })
     },
 
-    newDocument: () => {
-      const { doc, tree } = freshDoc()
+    setEditorMode: (mode) => set({ editorMode: mode }),
+
+    setObjectRotation: (rot) => set({ objectRotation: rot }),
+
+    rotateObject: (axis, deltaDeg) => {
+      const s = get()
+      const next = { ...s.objectRotation }
+      next[axis] = ((next[axis] + deltaDeg) % 360 + 360) % 360
+      set({ objectRotation: next })
+    },
+
+    newDocument: (template = 'tuck') => {
+      const doc = buildTemplate(template)
       set({
         doc,
-        tree,
+        tree: buildPanelTree(doc),
+        baseDoc: doc,
         angles: {},
         steps: [],
         history: { base: emptyEditable(), log: [], cursor: 0 },
-        selectedFaceId: null,
+        selection: [],
         playback: { mode: 'edit' },
         fileName: 'untitled.fold',
+        objectRotation: { x: 0, y: 0, z: 0 },
+        editorMode: '3d',
       })
     },
 
     saveFile: () => {
       const s = get()
-      const file = toFoldFile(s.doc, s.angles, s.steps, s.history)
+      const file = toFoldFile(s.doc, s.angles, s.steps, s.history, s.objectRotation)
       const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -289,12 +360,15 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         doc: loaded.doc,
         tree: buildPanelTree(loaded.doc),
+        baseDoc: loaded.baseDoc,
         angles: loaded.angles,
         steps: loaded.steps,
         history: loaded.history,
-        selectedFaceId: null,
+        selection: [],
         playback: { mode: 'edit' },
         fileName,
+        objectRotation: loaded.objectRotation,
+        editorMode: '3d',
       })
     },
   }
@@ -323,10 +397,26 @@ function smoothstep(x: number): number {
   return x * x * (3 - 2 * x)
 }
 
-/** The hinge edge id controlled by the selected face (null for root/none). */
+/** Primary selected face (the last one selected), or null. */
+export function primaryFaceId(s: AppState): number | null {
+  return s.selection.length > 0 ? s.selection[s.selection.length - 1] : null
+}
+
+/** The hinge edge id controlled by the primary selection (null for root/none). */
 export function selectedHinge(s: AppState): number | null {
-  if (s.selectedFaceId === null) return null
-  return s.tree.nodes.get(s.selectedFaceId)?.hingeEdgeId ?? null
+  const fid = primaryFaceId(s)
+  if (fid === null) return null
+  return s.tree.nodes.get(fid)?.hingeEdgeId ?? null
+}
+
+/** All hinge edge ids across the selection, primary last, deduplicated. */
+export function selectedHinges(s: AppState): number[] {
+  const out: number[] = []
+  for (const fid of s.selection) {
+    const h = s.tree.nodes.get(fid)?.hingeEdgeId
+    if (h !== null && h !== undefined && !out.includes(h)) out.push(h)
+  }
+  return out
 }
 
 /** The panel a hinge folds (the child face of the tree edge). */
@@ -344,6 +434,10 @@ export function describeOp(s: AppState, op: Op): string {
   switch (op.type) {
     case 'setAngle':
       return `Fold "${hingePanelName(s, op.edgeId)}" ${Math.round(op.prev)}° → ${Math.round(op.next)}°`
+    case 'setAngles':
+      return `Fold ${op.changes.length} creases together`
+    case 'setDoc':
+      return `Dieline: ${op.label}`
     case 'addStep':
       return `Add keyframe "${op.step.name}"`
     case 'truncateSteps':

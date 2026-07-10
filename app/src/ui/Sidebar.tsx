@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { faceById } from '../model/document'
-import { selectedHinge, useAppStore } from '../state/store'
+import { selectedHinge, selectedHinges, useAppStore, type AppState } from '../state/store'
+import { dielineSVG, downloadText, openInstructionSheet } from './exports'
 
 export function Sidebar() {
   const s = useAppStore()
@@ -8,7 +8,10 @@ export function Sidebar() {
   const fileInput = useRef<HTMLInputElement>(null)
 
   const hinge = selectedHinge(s)
-  const selectedFace = s.selectedFaceId !== null ? faceById(s.doc, s.selectedFaceId) : null
+  const hinges = selectedHinges(s)
+  const selectedFaces = s.selection
+    .map((id) => s.doc.faces.find((f) => f.id === id))
+    .filter((f): f is NonNullable<typeof f> => f !== undefined)
 
   async function onLoadFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -22,25 +25,28 @@ export function Sidebar() {
     }
   }
 
+  function newDoc(template: 'tuck' | 'gable', label: string) {
+    if (confirm(`Start a new ${label}? Unsaved work will be lost.`)) s.newDocument(template)
+  }
+
   return (
     <div className="sidebar">
       <div className="brand">
         <span className="brand-title">Paper Sim</span>
-        <span className="brand-sub">v0 — fold the carton</span>
+        <span className="brand-sub">v1 — fold anything flat</span>
       </div>
 
       <section>
         <h3>File</h3>
         <div className="btn-row">
-          <button
-            onClick={() => {
-              if (confirm('Start a new document? Unsaved work will be lost.')) s.newDocument()
-            }}
-          >
-            New
-          </button>
+          <button onClick={() => newDoc('tuck', 'tuck box')}>New: Box</button>
+          <button onClick={() => newDoc('gable', 'milk carton')}>New: Milk carton</button>
+        </div>
+        <div className="btn-row">
           <button onClick={() => s.saveFile()}>Save</button>
-          <button onClick={() => fileInput.current?.click()}>Load</button>
+          <button onClick={() => fileInput.current?.click()} title="Open a PaperSim or any FOLD file">
+            Load
+          </button>
           <input
             ref={fileInput}
             type="file"
@@ -54,23 +60,36 @@ export function Sidebar() {
 
       <section>
         <h3>Selection</h3>
-        {selectedFace === null ? (
+        {selectedFaces.length === 0 ? (
           <p className="hint">
-            Click a panel in the 3D view or the 2D pattern. Press <b>F</b> to frame the selection
-            (or reset the view when nothing is selected).
+            Click a panel in the 3D view or the 2D pattern (Ctrl+click adds panels to fold
+            together). Press <b>F</b> to frame the model.
           </p>
-        ) : (
+        ) : selectedFaces.length === 1 ? (
           <>
-            <div className="sel-name">{selectedFace.name}</div>
+            <div className="sel-name">{selectedFaces[0].name}</div>
             {hinge === null ? (
               <p className="hint">This is the root panel — it has no fold of its own.</p>
             ) : (
               <AngleControl edgeId={hinge} disabled={!editMode} />
             )}
           </>
+        ) : (
+          <>
+            <div className="sel-name">
+              {selectedFaces.length} panels: {selectedFaces.map((f) => f.name).join(', ')}
+            </div>
+            {hinges.length === 0 ? (
+              <p className="hint">None of these panels has a fold.</p>
+            ) : (
+              <GroupAngleControl hinges={hinges} disabled={!editMode} />
+            )}
+          </>
         )}
       </section>
 
+      <ObjectControl />
+      <ExportPanel />
       <StepsPanel />
     </div>
   )
@@ -169,6 +188,170 @@ function AngleControl({ edgeId, disabled }: { edgeId: number; disabled: boolean 
         Drag the orange ring in 3D — it snaps near these angles (Alt = free, Shift = 15° grid).
       </p>
     </div>
+  )
+}
+
+/** One control folding several hinges together (e.g. a gable-top spout). */
+function GroupAngleControl({ hinges, disabled }: { hinges: number[]; disabled: boolean }) {
+  const s = useAppStore()
+  const targets = hinges.map((h) => s.doc.targetAngles?.[h])
+  const haveTargets = hinges.filter((_, i) => targets[i] !== undefined && targets[i] !== 0)
+  const dragStart = useRef<Record<number, number> | null>(null)
+
+  // Progress toward targets: mean of angle/target across hinges with targets.
+  const fractions = haveTargets.map((h) => {
+    const t = s.doc.targetAngles![h]
+    return ((s.angles[h] ?? 0) / t) * 100
+  })
+  const percent =
+    fractions.length > 0
+      ? Math.round(fractions.reduce((a, b) => a + b, 0) / fractions.length)
+      : 0
+
+  function anglesAt(f: number): Record<number, number> {
+    const out: Record<number, number> = {}
+    for (const h of haveTargets) {
+      const t = s.doc.targetAngles![h]
+      out[h] = Math.max(-179, Math.min(179, (t * f) / 100))
+    }
+    return out
+  }
+
+  function commitTo(map: Record<number, number>) {
+    const cur = useAppStore.getState().angles
+    const changes = Object.keys(map)
+      .map(Number)
+      .map((h) => ({ edgeId: h, prev: cur[h] ?? 0, next: map[h] }))
+      .filter((c) => c.prev !== c.next)
+    if (changes.length > 0) s.dispatch({ type: 'setAngles', changes })
+  }
+
+  return (
+    <div className="angle-control">
+      <label>Fold together{haveTargets.length < hinges.length ? ' (creases with targets)' : ''}</label>
+      {haveTargets.length === 0 ? (
+        <p className="hint">
+          These creases have no target angles — drag the gizmo ring instead (all selected creases
+          fold with it), or set targets in the dieline editor.
+        </p>
+      ) : (
+        <>
+          <div className="btn-row">
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              disabled={disabled}
+              value={Math.max(0, Math.min(100, percent))}
+              onPointerDown={() => {
+                const cur = useAppStore.getState().angles
+                const snapshot: Record<number, number> = {}
+                for (const h of haveTargets) snapshot[h] = cur[h] ?? 0
+                dragStart.current = snapshot
+              }}
+              onChange={(e) => s.setAnglesTransient(anglesAt(Number(e.target.value)))}
+              onPointerUp={() => {
+                const start = dragStart.current
+                dragStart.current = null
+                if (!start) return
+                const cur = useAppStore.getState().angles
+                const changes = haveTargets
+                  .map((h) => ({ edgeId: h, prev: start[h], next: cur[h] ?? 0 }))
+                  .filter((c) => c.prev !== c.next)
+                if (changes.length > 0) {
+                  s.dispatch({ type: 'setAngles', changes }, { alreadyApplied: true })
+                }
+              }}
+            />
+            <span className="unit">{percent}%</span>
+          </div>
+          <div className="btn-row presets">
+            <button disabled={disabled} onClick={() => commitTo(anglesAt(0))}>
+              Flat
+            </button>
+            <button disabled={disabled} onClick={() => commitTo(anglesAt(50))}>
+              Half
+            </button>
+            <button
+              disabled={disabled}
+              className="suggest-0"
+              title="Fold every selected crease to its target angle"
+              onClick={() => commitTo(anglesAt(100))}
+            >
+              To target
+            </button>
+          </div>
+          <p className="hint">
+            0–100% folds every selected crease toward its own target. The gizmo ring drives the
+            group too.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+function ObjectControl() {
+  const s = useAppStore()
+  const rot = s.objectRotation
+  const axes: Array<keyof typeof rot> = ['x', 'y', 'z']
+  return (
+    <section>
+      <h3>Object</h3>
+      <div className="object-rows">
+        {axes.map((axis) => (
+          <div className="btn-row object-row" key={axis}>
+            <span className="axis-label">{axis.toUpperCase()}</span>
+            <button onClick={() => s.rotateObject(axis, -90)}>−90°</button>
+            <button onClick={() => s.rotateObject(axis, 90)}>+90°</button>
+            <span className="axis-val">{rot[axis]}°</span>
+          </div>
+        ))}
+      </div>
+      <div className="btn-row">
+        <button
+          className="subtle"
+          disabled={rot.x === 0 && rot.y === 0 && rot.z === 0}
+          onClick={() => s.setObjectRotation({ x: 0, y: 0, z: 0 })}
+        >
+          Reset orientation
+        </button>
+      </div>
+      <p className="hint">
+        Rotates the whole model (e.g. stand the carton upright). It always re-centers and rests on
+        the ground.
+      </p>
+    </section>
+  )
+}
+
+function ExportPanel() {
+  const s = useAppStore()
+  const baseName = s.fileName.replace(/\.fold$/, '')
+  return (
+    <section>
+      <h3>Export</h3>
+      <div className="btn-row">
+        <button
+          title="Download the flat dieline as an SVG (cuts solid, folds dashed)"
+          onClick={() => downloadText(dielineSVG(s.doc), `${baseName}-dieline.svg`, 'image/svg+xml')}
+        >
+          Dieline SVG
+        </button>
+        <button
+          title="Open a printable sheet: dieline + numbered snapshots of each fold step"
+          onClick={() => {
+            const state = useAppStore.getState() as AppState
+            if (!openInstructionSheet(state.doc, state.steps, baseName)) {
+              alert('Record at least one keyframe first — the sheet shows one image per step.')
+            }
+          }}
+        >
+          Instruction sheet
+        </button>
+      </div>
+    </section>
   )
 }
 

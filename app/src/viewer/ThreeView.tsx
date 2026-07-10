@@ -3,7 +3,14 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { sheetBounds, type PanelTree, type PaperDoc } from '../model/document'
 import { computeFaceMatrices, degToRad, radToDeg } from '../model/fold'
-import { getDisplayAngles, selectedHinge, useAppStore } from '../state/store'
+import {
+  getDisplayAngles,
+  primaryFaceId,
+  selectedHinge,
+  selectedHinges,
+  useAppStore,
+} from '../state/store'
+import { registerCapture, type PoseAngles } from './capture'
 
 const PAPER_T = 0.06
 const KRAFT = 0xd9bc8d
@@ -13,6 +20,7 @@ const CREASE_VALLEY = 0x2563eb
 const CREASE_MOUNTAIN = 0xdc2626
 const CREASE_SELECTED = 0xff9f1c
 const SELECT_EMISSIVE = 0x2b4a6f
+const SELECT_EMISSIVE_SECONDARY = 0x1d3a2a
 const SNAP_TOLERANCE = 5 // degrees; soft-snap radius around preset angles
 
 const SCENE_THEMES = {
@@ -31,9 +39,15 @@ interface View {
   halfH: number // ortho frustum half-height at zoom 1 (unused for persp)
 }
 
-interface DragState {
+interface DragHinge {
   edgeId: number
   startDeg: number
+  target: number | undefined
+}
+
+interface DragState {
+  /** Primary hinge (the gizmo's) first; coupled hinges after. */
+  hinges: DragHinge[]
   plane: THREE.Plane
   center: THREE.Vector3
   u0: THREE.Vector3
@@ -48,6 +62,7 @@ export function ThreeView() {
   const frontRef = useRef<HTMLDivElement>(null)
   const sideRef = useRef<HTMLDivElement>(null)
   const viewLayout = useAppStore((s) => s.viewLayout)
+  const editorMode = useAppStore((s) => s.editorMode)
 
   useEffect(() => {
     const mount = mountRef.current!
@@ -78,9 +93,15 @@ export function ThreeView() {
       return g
     }
 
+    // Hierarchy: pivotGroup (auto-centering) > orientGroup (whole-object
+    // rotation) > modelGroup (sheet-to-world: flat xy plane -> ground plane).
+    const pivotGroup = new THREE.Group()
+    const orientGroup = new THREE.Group()
     const modelGroup = new THREE.Group()
     modelGroup.rotation.x = -Math.PI / 2
-    scene.add(modelGroup)
+    orientGroup.add(modelGroup)
+    pivotGroup.add(orientGroup)
+    scene.add(pivotGroup)
 
     // ---- views -----------------------------------------------------------
     function makeView(key: ViewKey, cell: HTMLDivElement): View {
@@ -118,11 +139,14 @@ export function ThreeView() {
 
     function setHomes(dim: number) {
       const y = dim * 0.14
+      // Ortho front/side look a bit higher: a folded model can stand tall on
+      // the ground plane and would otherwise clip below the frustum.
+      const yo = dim * 0.3
       const homes: Record<ViewKey, [THREE.Vector3, THREE.Vector3]> = {
         persp: [new THREE.Vector3(dim * 0.85, dim * 0.8, dim * 1.05), new THREE.Vector3(0, y, 0)],
         top: [new THREE.Vector3(0, dim * 2.2, 0), new THREE.Vector3(0, 0, 0)],
-        front: [new THREE.Vector3(0, y, dim * 2.2), new THREE.Vector3(0, y, 0)],
-        side: [new THREE.Vector3(dim * 2.2, y, 0), new THREE.Vector3(0, y, 0)],
+        front: [new THREE.Vector3(0, yo, dim * 2.2), new THREE.Vector3(0, yo, 0)],
+        side: [new THREE.Vector3(dim * 2.2, yo, 0), new THREE.Vector3(0, yo, 0)],
       }
       for (const v of views) {
         const [pos, target] = homes[v.key]
@@ -148,6 +172,7 @@ export function ThreeView() {
     // ---- model -----------------------------------------------------------
     let faceMeshes = new Map<number, THREE.Mesh>()
     let creaseLines = new Map<number, THREE.Line>()
+    let facePoints = new Map<number, THREE.Vector3[]>() // flat verts per face
 
     const gizmo = new THREE.Group()
     const ring = new THREE.Mesh(
@@ -180,6 +205,7 @@ export function ThreeView() {
       }
       faceMeshes = new Map()
       creaseLines = new Map()
+      facePoints = new Map()
     }
 
     function buildModel(doc: PaperDoc, tree: PanelTree) {
@@ -204,6 +230,10 @@ export function ThreeView() {
         mesh.add(outline)
         modelGroup.add(mesh)
         faceMeshes.set(face.id, mesh)
+        facePoints.set(
+          face.id,
+          pts.map((p) => new THREE.Vector3(p.x, p.y, 0)),
+        )
       }
       for (const [fid, node] of tree.nodes) {
         if (node.hingeEdgeId === null) continue
@@ -236,6 +266,48 @@ export function ThreeView() {
       }
     })
 
+    // ---- auto-centering pivot ---------------------------------------------
+    // Keep the folded model's bounding box centered on the world origin and
+    // resting on the grid, whatever the fold pose / object rotation is.
+    const bboxMin = new THREE.Vector3()
+    const bboxMax = new THREE.Vector3()
+    const tmpV = new THREE.Vector3()
+    const tmpM = new THREE.Matrix4()
+
+    /** Model bounds in pivot-local space (after orient + fold, before pivot). */
+    function computeModelBounds(): { min: THREE.Vector3; max: THREE.Vector3 } | null {
+      orientGroup.updateMatrix()
+      modelGroup.updateMatrix()
+      let any = false
+      bboxMin.set(Infinity, Infinity, Infinity)
+      bboxMax.set(-Infinity, -Infinity, -Infinity)
+      for (const [fid, mesh] of faceMeshes) {
+        const pts = facePoints.get(fid)
+        if (!pts) continue
+        tmpM.multiplyMatrices(orientGroup.matrix, modelGroup.matrix).multiply(mesh.matrix)
+        for (const p of pts) {
+          tmpV.copy(p).applyMatrix4(tmpM)
+          bboxMin.min(tmpV)
+          bboxMax.max(tmpV)
+          any = true
+        }
+      }
+      return any ? { min: bboxMin, max: bboxMax } : null
+    }
+
+    const pivotTarget = new THREE.Vector3()
+    function updatePivot(dt: number, snap: boolean) {
+      const b = computeModelBounds()
+      if (!b) return
+      pivotTarget.set(
+        -(b.min.x + b.max.x) / 2,
+        -b.min.y,
+        -(b.min.z + b.max.z) / 2,
+      )
+      if (snap) pivotGroup.position.copy(pivotTarget)
+      else pivotGroup.position.lerp(pivotTarget, Math.min(1, dt * 10))
+    }
+
     // ---- picking & gizmo drag ---------------------------------------------
     const raycaster = new THREE.Raycaster()
     const ndc = new THREE.Vector2()
@@ -257,12 +329,14 @@ export function ThreeView() {
       radius: number
     } | null {
       const s = useAppStore.getState()
-      if (s.selectedFaceId === null) return null
-      const node = s.tree.nodes.get(s.selectedFaceId)
+      const fid = primaryFaceId(s)
+      if (fid === null) return null
+      const node = s.tree.nodes.get(fid)
       if (!node || node.hingeEdgeId === null) return null
       const parentM = computeFaceMatrices(s.doc, s.tree, radAngles(getDisplayAngles(s))).get(
         node.parentFaceId!,
-      )!
+      )
+      if (!parentM) return null
       const a = new THREE.Vector3(node.axisA!.x, node.axisA!.y, 0).applyMatrix4(parentM)
       const b = new THREE.Vector3(node.axisB!.x, node.axisB!.y, 0).applyMatrix4(parentM)
       const mid = a.clone().add(b).multiplyScalar(0.5)
@@ -286,6 +360,29 @@ export function ThreeView() {
       return out
     }
 
+    /** Angle map for a group drag driven by the primary hinge's new angle. */
+    function groupAngles(hinges: DragHinge[], primaryDeg: number): Record<number, number> {
+      const out: Record<number, number> = {}
+      const primary = hinges[0]
+      out[primary.edgeId] = primaryDeg
+      for (let i = 1; i < hinges.length; i++) {
+        const h = hinges[i]
+        let deg: number
+        if (
+          primary.target !== undefined &&
+          primary.target !== 0 &&
+          h.target !== undefined
+        ) {
+          // Fold coupled hinges proportionally toward their own targets.
+          deg = h.target * (primaryDeg / primary.target)
+        } else {
+          deg = h.startDeg + (primaryDeg - primary.startDeg)
+        }
+        out[h.edgeId] = Math.max(-179, Math.min(179, deg))
+      }
+      return out
+    }
+
     function attachCellEvents(view: View) {
       const { cell, camera, controls } = view
 
@@ -305,9 +402,15 @@ export function ThreeView() {
         const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(axisW, centerW)
         const hit = new THREE.Vector3()
         if (!raycaster.ray.intersectPlane(plane, hit)) return
+        const hingeIds = selectedHinges(s)
+        // Primary (the gizmo's hinge) first, then the rest of the selection.
+        const ordered = [axis.edgeId, ...hingeIds.filter((h) => h !== axis.edgeId)]
         drag = {
-          edgeId: axis.edgeId,
-          startDeg: s.angles[axis.edgeId] ?? 0,
+          hinges: ordered.map((edgeId) => ({
+            edgeId,
+            startDeg: s.angles[edgeId] ?? 0,
+            target: s.doc.targetAngles?.[edgeId],
+          })),
           plane,
           center: centerW,
           u0: hit.sub(centerW).normalize(),
@@ -327,12 +430,12 @@ export function ThreeView() {
         const u1 = hit.sub(drag.center).normalize()
         const cross = new THREE.Vector3().crossVectors(drag.u0, u1)
         const delta = Math.atan2(drag.axisW.dot(cross), drag.u0.dot(u1))
-        let deg = drag.startDeg + radToDeg(delta)
+        let deg = drag.hinges[0].startDeg + radToDeg(delta)
         if (e.shiftKey) {
           deg = Math.round(deg / 15) * 15
         } else if (!e.altKey) {
           // Soft-snap to preset/target angles (Alt = free rotation).
-          for (const c of snapCandidates(drag.edgeId)) {
+          for (const c of snapCandidates(drag.hinges[0].edgeId)) {
             if (Math.abs(deg - c) <= SNAP_TOLERANCE) {
               deg = c
               break
@@ -341,18 +444,28 @@ export function ThreeView() {
         }
         deg = Math.max(-179, Math.min(179, deg))
         drag.moved = true
-        useAppStore.getState().setAngleTransient(drag.edgeId, deg)
+        useAppStore.getState().setAnglesTransient(groupAngles(drag.hinges, deg))
       }
 
       function onPointerUp(e: PointerEvent) {
         if (drag) {
           const s = useAppStore.getState()
-          const finalDeg = s.angles[drag.edgeId] ?? 0
-          if (drag.moved && finalDeg !== drag.startDeg) {
-            s.dispatch(
-              { type: 'setAngle', edgeId: drag.edgeId, prev: drag.startDeg, next: finalDeg },
-              { alreadyApplied: true },
-            )
+          if (drag.moved) {
+            const changes = drag.hinges
+              .map((h) => ({
+                edgeId: h.edgeId,
+                prev: h.startDeg,
+                next: s.angles[h.edgeId] ?? 0,
+              }))
+              .filter((c) => c.prev !== c.next)
+            if (changes.length === 1) {
+              s.dispatch(
+                { type: 'setAngle', edgeId: changes[0].edgeId, prev: changes[0].prev, next: changes[0].next },
+                { alreadyApplied: true },
+              )
+            } else if (changes.length > 1) {
+              s.dispatch({ type: 'setAngles', changes }, { alreadyApplied: true })
+            }
           }
           drag = null
           controls.enabled = true
@@ -367,8 +480,11 @@ export function ThreeView() {
         raycaster.setFromCamera(ndc, camera)
         const hits = raycaster.intersectObjects([...faceMeshes.values()], false)
         const s = useAppStore.getState()
-        if (hits.length > 0) s.selectFace(hits[0].object.userData.faceId as number)
-        else s.selectFace(null)
+        if (hits.length > 0) {
+          s.selectFace(hits[0].object.userData.faceId as number, e.ctrlKey || e.metaKey)
+        } else if (!e.ctrlKey && !e.metaKey) {
+          s.selectFace(null)
+        }
       }
 
       cell.addEventListener('pointerdown', onPointerDown)
@@ -383,30 +499,62 @@ export function ThreeView() {
 
     const detachers = views.map(attachCellEvents)
 
+    // ---- capture for instruction-sheet export ------------------------------
+    function capture(poses: PoseAngles[], size = { w: 720, h: 540 }): string[] {
+      const s = useAppStore.getState()
+      const off = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
+      off.setSize(size.w, size.h)
+      const cam = new THREE.PerspectiveCamera(40, size.w / size.h, 0.1, 500)
+      const prevBg = scene.background
+      const prevGrid = grid.visible
+      const prevGizmo = gizmo.visible
+      scene.background = new THREE.Color(0xf7f3ea)
+      grid.visible = false
+      gizmo.visible = false
+      const urls: string[] = []
+      try {
+        for (const pose of poses) {
+          const matrices = computeFaceMatrices(s.doc, s.tree, radAngles(pose))
+          for (const [fid, mesh] of faceMeshes) {
+            const m = matrices.get(fid)
+            if (m) mesh.matrix.copy(m)
+          }
+          updatePivot(0, true)
+          scene.updateMatrixWorld(true)
+          const b = computeModelBounds()
+          const c = b
+            ? new THREE.Vector3(0, (b.max.y - b.min.y) / 2, 0)
+            : new THREE.Vector3()
+          const radius = b ? Math.max(1.5, b.min.distanceTo(b.max) / 2) : 5
+          const dist = radius / Math.tan(degToRad(cam.fov / 2)) + radius * 0.4
+          cam.position.copy(c).add(new THREE.Vector3(0.85, 0.75, 1).normalize().multiplyScalar(dist))
+          cam.lookAt(c)
+          off.render(scene, cam)
+          urls.push(off.domElement.toDataURL('image/png'))
+        }
+      } finally {
+        scene.background = prevBg
+        grid.visible = prevGrid
+        gizmo.visible = prevGizmo
+        off.dispose()
+      }
+      return urls
+    }
+    registerCapture(capture)
+
     // Dev-only handle for scripted verification (scripts/verify-*.mjs).
     if (import.meta.env.DEV) {
-      ;(window as unknown as Record<string, unknown>).paperSimViewer = { gizmo, views }
+      ;(window as unknown as Record<string, unknown>).paperSimViewer = {
+        gizmo,
+        views,
+        pivotGroup,
+        orientGroup,
+        capture,
+      }
     }
 
     // ---- F to frame --------------------------------------------------------
-    function frameViews() {
-      const s = useAppStore.getState()
-      if (s.selectedFaceId === null) {
-        views.forEach(applyHome)
-        return
-      }
-      const face = s.doc.faces.find((f) => f.id === s.selectedFaceId)
-      const mesh = faceMeshes.get(s.selectedFaceId)
-      if (!face || !mesh) return
-      modelGroup.updateMatrixWorld()
-      const pts = face.vertexIds.map((id) => {
-        const v = s.doc.vertices.find((v) => v.id === id)!
-        return new THREE.Vector3(v.pos.x, v.pos.y, 0)
-          .applyMatrix4(mesh.matrix)
-          .applyMatrix4(modelGroup.matrixWorld)
-      })
-      const center = pts.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(pts.length)
-      const radius = Math.max(1.5, ...pts.map((p) => p.distanceTo(center)))
+    function frameOn(center: THREE.Vector3, radius: number) {
       for (const v of views) {
         if (v.camera instanceof THREE.PerspectiveCamera) {
           const dir = v.camera.position.clone().sub(v.controls.target).normalize()
@@ -422,6 +570,37 @@ export function ThreeView() {
         }
         v.controls.update()
       }
+    }
+
+    function frameViews() {
+      const s = useAppStore.getState()
+      const fid = primaryFaceId(s)
+      if (fid === null) {
+        // Nothing selected: frame the whole model where it currently is.
+        updatePivot(0, true)
+        const b = computeModelBounds()
+        if (!b) {
+          views.forEach(applyHome)
+          return
+        }
+        const center = new THREE.Vector3(0, (b.max.y - b.min.y) / 2, 0)
+        const radius = Math.max(2, b.min.distanceTo(b.max) / 2)
+        frameOn(center, radius)
+        return
+      }
+      const face = s.doc.faces.find((f) => f.id === fid)
+      const mesh = faceMeshes.get(fid)
+      if (!face || !mesh) return
+      pivotGroup.updateMatrixWorld(true)
+      const pts = face.vertexIds.map((id) => {
+        const v = s.doc.vertices.find((v) => v.id === id)!
+        return new THREE.Vector3(v.pos.x, v.pos.y, 0)
+          .applyMatrix4(mesh.matrix)
+          .applyMatrix4(modelGroup.matrixWorld)
+      })
+      const center = pts.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(pts.length)
+      const radius = Math.max(1.5, ...pts.map((p) => p.distanceTo(center)))
+      frameOn(center, radius)
     }
 
     function onKeyDown(e: KeyboardEvent) {
@@ -446,6 +625,7 @@ export function ThreeView() {
     renderer.setScissorTest(true)
     const clock = new THREE.Clock()
     let raf = 0
+    let firstFrame = true
     function tick() {
       raf = requestAnimationFrame(tick)
       const dt = clock.getDelta()
@@ -480,14 +660,26 @@ export function ThreeView() {
           mesh.matrixWorldNeedsUpdate = true
         }
         const mat = mesh.material as THREE.MeshStandardMaterial
-        mat.emissive.setHex(fid === s.selectedFaceId ? SELECT_EMISSIVE : 0x000000)
+        const inSel = s.selection.includes(fid)
+        const isPrimary = fid === primaryFaceId(s)
+        mat.emissive.setHex(
+          isPrimary ? SELECT_EMISSIVE : inSel ? SELECT_EMISSIVE_SECONDARY : 0x000000,
+        )
         mat.emissiveIntensity = 0.35
       }
 
+      // Whole-object rotation + auto-centering pivot (frozen while dragging
+      // the fold gizmo so the model doesn't shift under the cursor).
+      const rot = s.objectRotation
+      orientGroup.rotation.set(degToRad(rot.x), degToRad(rot.y), degToRad(rot.z))
+      if (!drag) updatePivot(dt, firstFrame)
+      firstFrame = false
+
       const hinge = selectedHinge(s)
+      const groupHinges = selectedHinges(s)
       for (const [edgeId, line] of creaseLines) {
         const mat = line.material as THREE.LineBasicMaterial
-        if (edgeId === hinge) {
+        if (edgeId === hinge || groupHinges.includes(edgeId)) {
           mat.color.setHex(CREASE_SELECTED)
         } else {
           const a = display[edgeId] ?? 0
@@ -541,6 +733,7 @@ export function ThreeView() {
       window.removeEventListener('keydown', onKeyDown)
       detachers.forEach((d) => d())
       views.forEach((v) => v.controls.dispose())
+      registerCapture(null)
       disposeModel()
       renderer.dispose()
       mount.removeChild(renderer.domElement)
@@ -548,7 +741,11 @@ export function ThreeView() {
   }, [])
 
   return (
-    <div ref={mountRef} className={`viewport layout-${viewLayout}`}>
+    <div
+      ref={mountRef}
+      className={`viewport layout-${viewLayout}`}
+      style={editorMode === 'pattern' ? { display: 'none' } : undefined}
+    >
       <div ref={perspRef} className="view-cell" data-label="Perspective" />
       <div ref={topRef} className="view-cell view-ortho" data-label="Top" />
       <div ref={frontRef} className="view-cell view-ortho" data-label="Front" />

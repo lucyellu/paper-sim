@@ -4,7 +4,7 @@ import { getDisplayAngles, selectedHinge, useAppStore } from '../state/store'
 /** 2D dieline inset (bottom-left), mirroring PackCAD's pattern view. */
 export function PatternInset() {
   const s = useAppStore()
-  const { doc, selectedFaceId } = s
+  const { doc, selection } = s
   const display = getDisplayAngles(s)
   const hinge = selectedHinge(s)
 
@@ -30,7 +30,7 @@ export function PatternInset() {
               return `${p.x},${-p.y}`
             })
             .join(' ')
-          const selected = f.id === selectedFaceId
+          const selected = selection.includes(f.id)
           return (
             <polygon
               key={f.id}
@@ -39,7 +39,7 @@ export function PatternInset() {
               stroke={colors.stroke}
               strokeWidth={0.12}
               style={{ cursor: 'pointer' }}
-              onClick={() => s.selectFace(f.id)}
+              onClick={(e) => s.selectFace(f.id, e.ctrlKey || e.metaKey)}
             />
           )
         })}

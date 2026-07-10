@@ -2,7 +2,7 @@
 // using the dev-only window.paperSim handle. Usage: node scripts/verify.mjs
 import { chromium } from 'playwright'
 
-const URL = 'http://localhost:5173/'
+const URL = process.env.PAPERSIM_URL ?? 'http://localhost:5173/'
 const SHOTS = process.env.SHOT_DIR ?? 'scripts/shots'
 import { mkdirSync } from 'node:fs'
 mkdirSync(SHOTS, { recursive: true })
