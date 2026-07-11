@@ -1,4 +1,4 @@
-import { sheetBounds, vertexById } from '../model/document'
+import { columnFaceIds, rowFaceIds, sheetBounds, vertexById } from '../model/document'
 import { getDisplayAngles, selectedHinge, useAppStore } from '../state/store'
 
 /** 2D dieline inset (bottom-left), mirroring PackCAD's pattern view. */
@@ -39,7 +39,21 @@ export function PatternInset() {
               stroke={colors.stroke}
               strokeWidth={0.12}
               style={{ cursor: 'pointer' }}
-              onClick={(e) => s.selectFace(f.id, e.ctrlKey || e.metaKey)}
+              onClick={(e) => {
+                if (e.detail >= 3) {
+                  // Triple-click: the whole object (this face stays primary).
+                  s.selectFaces([
+                    ...doc.faces.map((x) => x.id).filter((id) => id !== f.id),
+                    f.id,
+                  ])
+                } else if (e.detail === 2) {
+                  // Double-click: the row (Shift = column), Maya-style.
+                  const band = e.shiftKey ? columnFaceIds(doc, f.id) : rowFaceIds(doc, f.id)
+                  s.selectFaces([...band.filter((id) => id !== f.id), f.id])
+                } else {
+                  s.selectFace(f.id, e.ctrlKey || e.metaKey)
+                }
+              }}
             />
           )
         })}

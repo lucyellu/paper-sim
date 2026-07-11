@@ -167,6 +167,48 @@ export function buildPanelTree(doc: PaperDoc): PanelTree {
   return { nodes, order, hingeEdgeIds }
 }
 
+function faceBBox(doc: PaperDoc, face: Face): { min: Vec2; max: Vec2 } {
+  const min = { x: Infinity, y: Infinity }
+  const max = { x: -Infinity, y: -Infinity }
+  for (const vid of face.vertexIds) {
+    const p = vertexById(doc, vid).pos
+    min.x = Math.min(min.x, p.x)
+    min.y = Math.min(min.y, p.y)
+    max.x = Math.max(max.x, p.x)
+    max.y = Math.max(max.y, p.y)
+  }
+  return { min, max }
+}
+
+function bandFaceIds(doc: PaperDoc, faceId: number, axis: 'x' | 'y'): number[] {
+  const seed = doc.faces.find((f) => f.id === faceId)
+  if (!seed) return []
+  const sb = faceBBox(doc, seed)
+  const lo = axis === 'y' ? sb.min.y : sb.min.x
+  const hi = axis === 'y' ? sb.max.y : sb.max.x
+  return doc.faces
+    .filter((f) => {
+      const b = faceBBox(doc, f)
+      const flo = axis === 'y' ? b.min.y : b.min.x
+      const fhi = axis === 'y' ? b.max.y : b.max.x
+      const overlap = Math.min(hi, fhi) - Math.max(lo, flo)
+      // Same band if the intervals overlap by at least a third of the
+      // narrower one (tolerates slightly staggered panels).
+      return overlap > Math.min(hi - lo, fhi - flo) * 0.34
+    })
+    .map((f) => f.id)
+}
+
+/** Faces in the same horizontal row as `faceId` (Maya-style loop select). */
+export function rowFaceIds(doc: PaperDoc, faceId: number): number[] {
+  return bandFaceIds(doc, faceId, 'y')
+}
+
+/** Faces in the same vertical column as `faceId`. */
+export function columnFaceIds(doc: PaperDoc, faceId: number): number[] {
+  return bandFaceIds(doc, faceId, 'x')
+}
+
 /** Bounding box of the flat sheet. */
 export function sheetBounds(doc: PaperDoc): { min: Vec2; max: Vec2 } {
   const min = { x: Infinity, y: Infinity }

@@ -1,7 +1,13 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { sheetBounds, type PanelTree, type PaperDoc } from '../model/document'
+import {
+  columnFaceIds,
+  rowFaceIds,
+  sheetBounds,
+  type PanelTree,
+  type PaperDoc,
+} from '../model/document'
 import { computeFaceMatrices, degToRad, radToDeg } from '../model/fold'
 import {
   getDisplayAngles,
@@ -11,6 +17,7 @@ import {
   useAppStore,
 } from '../state/store'
 import { registerCapture, type PoseAngles } from './capture'
+import { buildSheetCanvas, materialNeedsTexture } from './texture'
 
 const PAPER_T = 0.06
 const KRAFT = 0xd9bc8d
@@ -210,6 +217,9 @@ export function ThreeView() {
 
     function buildModel(doc: PaperDoc, tree: PanelTree) {
       disposeModel()
+      const { min, max } = sheetBounds(doc)
+      const bw = Math.max(max.x - min.x, 0.001)
+      const bh = Math.max(max.y - min.y, 0.001)
       for (const face of doc.faces) {
         const pts = face.vertexIds.map((id) => {
           const v = doc.vertices.find((v) => v.id === id)!
@@ -218,6 +228,14 @@ export function ThreeView() {
         const shape = new THREE.Shape(pts)
         const geom = new THREE.ExtrudeGeometry(shape, { depth: PAPER_T, bevelEnabled: false })
         geom.translate(0, 0, -PAPER_T / 2)
+        // UVs = flat sheet coords normalized to the sheet bounds: the dieline
+        // is the object's UV map, so overlay artwork lands where it's drawn.
+        const pos = geom.attributes.position as THREE.BufferAttribute
+        const uv = geom.attributes.uv as THREE.BufferAttribute
+        for (let i = 0; i < uv.count; i++) {
+          uv.setXY(i, (pos.getX(i) - min.x) / bw, (pos.getY(i) - min.y) / bh)
+        }
+        uv.needsUpdate = true
         const mat = new THREE.MeshStandardMaterial({ color: KRAFT, roughness: 0.92 })
         const mesh = new THREE.Mesh(geom, mat)
         mesh.matrixAutoUpdate = false
@@ -249,20 +267,62 @@ export function ThreeView() {
         faceMeshes.get(fid)!.add(line)
         creaseLines.set(node.hingeEdgeId, line)
       }
-      const { min, max } = sheetBounds(doc)
       const cx = (min.x + max.x) / 2
       const cy = (min.y + max.y) / 2
       modelGroup.position.set(-cx, 0, cy)
-      setHomes(Math.max(max.x - min.x, max.y - min.y))
+      setHomes(Math.max(bw, bh))
+      applySheetMaterial()
+    }
+
+    // ---- sheet material (base color / paper texture / design overlay) -----
+    let sheetTex: THREE.CanvasTexture | null = null
+    let texGen = 0
+
+    function applySheetMaterial() {
+      const m = useAppStore.getState().material
+      for (const mesh of faceMeshes.values()) {
+        const mat = mesh.material as THREE.MeshStandardMaterial
+        mat.map = sheetTex
+        if (sheetTex) mat.color.setHex(0xffffff)
+        else mat.color.set(m.baseColor)
+        mat.needsUpdate = true
+      }
+    }
+
+    function refreshSheetTexture() {
+      const s = useAppStore.getState()
+      if (!materialNeedsTexture(s.material)) {
+        texGen++
+        sheetTex?.dispose()
+        sheetTex = null
+        applySheetMaterial()
+        return
+      }
+      const gen = ++texGen
+      void buildSheetCanvas(s.doc, s.material).then((canvas) => {
+        if (gen !== texGen) return // superseded by a newer material/doc
+        sheetTex?.dispose()
+        sheetTex = new THREE.CanvasTexture(canvas)
+        sheetTex.colorSpace = THREE.SRGBColorSpace
+        sheetTex.anisotropy = 4
+        applySheetMaterial()
+      })
     }
 
     buildModel(useAppStore.getState().doc, useAppStore.getState().tree)
+    refreshSheetTexture()
 
     let currentDoc = useAppStore.getState().doc
+    let currentMaterial = useAppStore.getState().material
     const unsub = useAppStore.subscribe((s) => {
       if (s.doc !== currentDoc) {
         currentDoc = s.doc
+        currentMaterial = s.material
         buildModel(s.doc, s.tree)
+        refreshSheetTexture() // sheet bounds (the UV frame) may have changed
+      } else if (s.material !== currentMaterial) {
+        currentMaterial = s.material
+        refreshSheetTexture()
       }
     })
 
@@ -313,6 +373,8 @@ export function ThreeView() {
     const ndc = new THREE.Vector2()
     let drag: DragState | null = null
     let downPos: { x: number; y: number } | null = null
+    // Manual multi-click tracking (pointerup has no reliable click count).
+    const clickChain = { t: 0, x: 0, y: 0, count: 0 }
 
     function setNdcForCell(e: PointerEvent, cell: HTMLDivElement) {
       const rect = cell.getBoundingClientRect()
@@ -481,8 +543,27 @@ export function ThreeView() {
         const hits = raycaster.intersectObjects([...faceMeshes.values()], false)
         const s = useAppStore.getState()
         if (hits.length > 0) {
-          s.selectFace(hits[0].object.userData.faceId as number, e.ctrlKey || e.metaKey)
+          const fid = hits[0].object.userData.faceId as number
+          const now = performance.now()
+          const near =
+            now - clickChain.t < 450 &&
+            Math.hypot(e.clientX - clickChain.x, e.clientY - clickChain.y) < 8
+          clickChain.count = near ? clickChain.count + 1 : 1
+          clickChain.t = now
+          clickChain.x = e.clientX
+          clickChain.y = e.clientY
+          if (clickChain.count >= 3) {
+            // Triple-click: the whole object (clicked face stays primary).
+            s.selectFaces([...s.doc.faces.map((f) => f.id).filter((id) => id !== fid), fid])
+          } else if (clickChain.count === 2) {
+            // Double-click: the face's row (Shift = its column), Maya-style.
+            const band = e.shiftKey ? columnFaceIds(s.doc, fid) : rowFaceIds(s.doc, fid)
+            s.selectFaces([...band.filter((id) => id !== fid), fid])
+          } else {
+            s.selectFace(fid, e.ctrlKey || e.metaKey)
+          }
         } else if (!e.ctrlKey && !e.metaKey) {
+          clickChain.count = 0
           s.selectFace(null)
         }
       }
@@ -550,6 +631,7 @@ export function ThreeView() {
         pivotGroup,
         orientGroup,
         capture,
+        faceMeshes: () => faceMeshes,
       }
     }
 
@@ -735,6 +817,7 @@ export function ThreeView() {
       views.forEach((v) => v.controls.dispose())
       registerCapture(null)
       disposeModel()
+      sheetTex?.dispose()
       renderer.dispose()
       mount.removeChild(renderer.domElement)
     }

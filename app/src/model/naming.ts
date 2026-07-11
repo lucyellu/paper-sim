@@ -30,7 +30,7 @@ function readSeq(): Record<string, number> {
 export function nextExportName(projectName: string, kind: string, ext: string): string {
   const slug = slugify(projectName)
   const map = readSeq()
-  const key = `${slug}/${kind}`
+  const key = `${slug}/${kind}.${ext}` // per format: dieline.svg and dieline.pdf count separately
   const n = (map[key] ?? 0) + 1
   map[key] = n
   window.localStorage.setItem(SEQ_KEY, JSON.stringify(map))

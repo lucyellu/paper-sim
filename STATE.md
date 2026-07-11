@@ -150,13 +150,46 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
 - [x] Instruction-sheet export (printable page: dieline + numbered snapshots per step; offscreen
       renders via `viewer/capture.ts`) — fold arrows still TODO — 2026-07-10
 - [x] Dieline SVG export (cuts solid, valley/mountain dashed) — 2026-07-10
+- [x] PDF export: dieline (vector) + instructions (embedded snapshots) via a dependency-free
+      PDF writer (`ui/pdf.ts`) — 2026-07-10
+- [x] Materials: base color / procedural kraft / uploaded texture + design-overlay image mapped
+      onto the dieline (UVs = flat coords; overlay shows in the pattern editor too); persisted as
+      `paperSim:material` — both-sides distinction still TODO — 2026-07-10
+- [x] Templates ship with authored fold steps (baked into history base; play through on load)
+      (`model/templates.ts`) — 2026-07-10
+- [x] Panel UX: resizable + collapsible side panels, collapsible sections (localStorage);
+      Object controls moved to the right panel — 2026-07-10
+- [x] Maya-style selection: double-click = row, Shift+double-click = column, triple-click =
+      whole object (3D view + 2D inset; `rowFaceIds`/`columnFaceIds`) — 2026-07-10
 - [ ] Per-hinge angle limits (basic constraints)
-- [ ] Materials: paper color/texture both sides, artwork mapping
 - [ ] Animation export (GIF/MP4)
 - [ ] Starter model library from `reference/` (gift box, cup, boat, peacock…)
 - [ ] History panel: per-object filtered op list, per-object Delete History (compaction)
-- [ ] Micro-crease fan tool (approximate curved bends) — unlocks the lucky star
+- [ ] Micro-crease fan tool / soft folds (see "Soft folds" note below) — unlocks the can shape,
+      curved box, and the lucky star
+- [ ] SVG dieline import (PackCAD-style color mapping — see "Soft folds" note)
 - [ ] Cozy UI pass per `reference/GUI/`
+
+### Soft folds / curved creases — findings from PackCAD's curved box (2026-07-10)
+
+`assets/curved_box/` (local-only) holds a PackCAD project we can't load yet. Dissecting it:
+
+- `curvedbox.Dp6qF5YV.json` is the PackCAD project: an **imported SVG dieline** plus operations —
+  `OPERATION_IMPORT_SVG` (full SVG string inline), `OPERATION_FOLDING_SETUP` (fixed root face),
+  and one `OPERATION_ORIGAMI_SIMULATION` per fold keyframe (groups of edge IDs + target angle —
+  same shape as our steps + group folds).
+- The SVG encodes semantics by stroke color: **black = cut, red = crease, yellow = soft/curved
+  fold lines** — the yellow lines are a *fan of 8 parallel creases* spanning the bend region.
+  So PackCAD's "soft fold" is exactly the micro-crease-fan approximation our roadmap planned:
+  each fan line takes a fraction of the total bend angle. No new engine needed — our kinematic
+  hinge tree already does this; we need (a) SVG import with that color mapping, (b) panels
+  bounded by curved (polyline-approximated) outlines, and (c) a "distribute angle across a fan"
+  control (a special group fold where each hinge gets total/n).
+- Curved panel outlines are just cut paths that aren't straight — our doc model already allows
+  arbitrary polygon faces; import needs to flatten Béziers/arcs to polylines.
+
+Suggested attack order for the next round: SVG dieline import (black/red/yellow mapping, Bézier
+flattening) → fan group-fold control → rebuild the curved box → then a "can" template.
 
 ### v2 — Sandbox & generation
 - [ ] Gallery/scene: place multiple folded models in a 3D scene
@@ -183,6 +216,21 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
 
 *(newest first)*
 
+- **2026-07-10 (evening)** — **Workspace, materials, PDFs, template steps round**: side panels
+  now drag-resize and collapse to labeled strips, every section collapses (all persisted in
+  localStorage); Object controls moved to the right panel; Maya-style selection (double-click =
+  row, Shift+double-click = column, triple-click = whole object, in 3D and the 2D inset);
+  material system — base color / procedural kraft tile / uploaded texture (tiled) + design
+  overlay stretched over the dieline (UVs = normalized flat coords, so the pattern editor shows
+  exactly where art lands; overlay drawn in the editor as reference; persisted as
+  `paperSim:material` data URLs, uploads downscaled to ≤2048px); dependency-free PDF writer
+  (`ui/pdf.ts`: vector lines, Helvetica text, JPEG embedding) powering Dieline PDF + Instructions
+  PDF exports (both also added to the project zip; per-format export counters); built-in
+  templates now ship with 3 authored fold steps baked into the history base (open → press play;
+  survives save/load; `model/templates.ts`). Dissected PackCAD's curved-box project
+  (`assets/curved_box/`): their soft fold = fan of parallel creases, SVG colors black/red/yellow
+  = cut/crease/soft — full notes + attack plan under "Soft folds" in the roadmap. New
+  `scripts/verify-v4.mjs` (all checks pass); whole suite green.
 - **2026-07-10 (later)** — **Projects & exports round**: project name field (persists as FOLD
   `file_title`, falls back to the file name on load), step renaming (already in v1 slice; kept),
   per-project iterated export names via localStorage counters (`carton_dieline_001.svg`, `_002`…,

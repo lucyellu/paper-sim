@@ -16,27 +16,38 @@ starts the dev server if it isn't running and opens the app in the browser.
 
 - **New: Box / New: Milk carton** — starter dielines. The milk carton is a gable-top with the
   spout gusset creases (diagonals on the side tops); every crease carries the target angle that
-  seals the carton, derived from the sealed 3D pose.
+  seals the carton. Both templates come with their fold steps already recorded — press **play**
+  on the timeline to watch them fold, or export instructions immediately.
 - **Click a panel** (3D view or 2D pattern inset) to select it; drag the **orange ring** to fold
   along its hinge. The ring soft-snaps near preset/target angles (Alt = free, Shift = 15° grid);
   the sidebar has slider/number input plus preset buttons tinted by how close they are to the
   model's intended fold angle.
 - **Ctrl+click** adds panels to the selection to **fold them together**: the sidebar shows a
   0–100% "fold toward targets" slider (each crease moves toward its own target — this is how the
-  gable top folds inward as one), and the gizmo ring drives the whole group.
-- **Object** section rotates the whole model in 90° steps (e.g. stand the carton upright). The
-  model always re-centers over the world origin and rests on the ground plane.
+  gable top folds inward as one), and the gizmo ring drives the whole group. **Double-click**
+  selects a panel's whole row, **Shift+double-click** its column, **triple-click** the entire
+  object (works in 3D and in the 2D inset).
+- **Panels & sections**: drag a side panel's inner edge to resize it, use the ⟨/⟩ button to
+  collapse it to a strip, and click any section header to fold it shut — the layout is
+  remembered.
+- **Object** section (right panel) rotates the whole model in 90° steps (e.g. stand the carton
+  upright). The model always re-centers over the world origin and rests on the ground plane.
+- **Material** section (right panel): base look (plain color, procedural kraft paper, or your
+  own texture image, tiled) plus a **design overlay** stretched over the dieline — the flat
+  pattern is the object's UV map, exactly like a product mockup. The overlay is shown in the
+  dieline editor so you can line art up with panels. Saved inside the `.fold` file.
 - **✎ (top right)** opens the **dieline editor**: draw creases/cuts (endpoints snap to points and
   lines; drawing across a panel splits it), delete lines between panels (merges them), click a
   line to retype it (cut ↔ crease) or set its target angle, drag points to move them. All edits
   are undoable history ops.
 - **Project name** (File section) names your work; fold steps can be renamed in the steps list.
   Exports are numbered per project — `carton_dieline_001.svg`, `_002`, … — so nothing overwrites.
-- **Export** — *Dieline SVG* downloads the flat pattern (cuts solid, valley/mountain dashed);
-  *Instruction sheet* opens a printable page with the dieline plus one numbered 3D snapshot per
-  fold step (print to PDF from the browser); *Export project (zip)* downloads everything — a
-  `projectname/` folder with the `.fold` file (model + history), dieline SVG, a snapshot of the
-  current pose, and the instruction sheet.
+- **Export** — *Dieline SVG* / *Dieline PDF* download the flat pattern (cuts solid,
+  valley/mountain dashed; the PDF is true vector); *Instructions* opens a printable page with
+  the dieline plus one numbered 3D snapshot per fold step, and *Instructions PDF* downloads the
+  same as a ready-made PDF; *Export project (zip)* downloads everything — a `projectname/`
+  folder with the `.fold` file (model + history), dieline SVG + PDF, a snapshot of the current
+  pose, and the instructions HTML + PDF.
 - **F** frames the selected panel in all views; with nothing selected it frames the whole model.
 - **Add Keyframe** records the current pose as the next fold step. The timeline shows a numbered
   notch per step — click one to select it, then ✎ re-edit (re-record) or ⏵ continue after it.
@@ -62,7 +73,8 @@ node scripts/verify-v2.mjs     # timeline notches, history panel surgery, quad v
 node scripts/verify-v3.mjs     # gable closure math, group folds, dieline editing, FOLD import
 node scripts/repro-crash.mjs   # step re-edit / history-surgery stress (duplicate-id regression)
 node scripts/check-sheet.mjs   # instruction-sheet popup + group-fold UI
-node scripts/check-exports.mjs # numbered export names, project bundle zip, name round-trip
+node scripts/check-exports.mjs # numbered export names, PDFs, project bundle zip, name round-trip
+node scripts/verify-v4.mjs     # template steps, row/column/object selection, materials, panels
 node scripts/shoot-v3.mjs      # visual pass: carton fold sequence + editor screenshots
 ```
 

@@ -64,11 +64,26 @@ body {
   background: var(--bg);
 }
 
-.sidebar {
-  width: 270px;
+/* ---- side panels: resizable + collapsible ---- */
+
+.side-panel {
+  position: relative;
   flex: none;
   background: var(--panel);
+  display: flex;
+  min-width: 0;
+}
+
+.side-panel.left {
   border-right: 1px solid var(--panel-border);
+}
+
+.side-panel.right {
+  border-left: 1px solid var(--panel-border);
+}
+
+.panel-scroll {
+  width: 100%;
   padding: 14px;
   overflow-y: auto;
   display: flex;
@@ -76,16 +91,126 @@ body {
   gap: 16px;
 }
 
-.details {
-  width: 290px;
-  flex: none;
-  background: var(--panel);
-  border-left: 1px solid var(--panel-border);
-  padding: 14px;
-  overflow-y: auto;
-  display: flex;
+.panel-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+}
+
+.panel-grip.left {
+  right: -4px;
+}
+
+.panel-grip.right {
+  left: -4px;
+}
+
+.panel-grip:hover {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.panel-toggle {
+  position: absolute;
+  top: 8px;
+  z-index: 6;
+  padding: 1px 5px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--muted);
+  border-radius: 5px;
+}
+
+.panel-toggle.open.left {
+  right: 4px;
+}
+
+.panel-toggle.open.right {
+  left: 4px;
+}
+
+.side-panel.strip {
+  align-items: flex-start;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
+}
+
+.side-panel.strip .panel-toggle {
+  position: static;
+  margin: 8px auto 0;
+}
+
+.panel-vtitle {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+  margin: 6px auto 0;
+  user-select: none;
+}
+
+/* ---- collapsible sections ---- */
+
+.sec-head {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sec-head:hover {
+  color: var(--text);
+}
+
+.chev {
+  display: inline-block;
+  transition: transform 0.12s ease;
+  font-size: 9px;
+}
+
+.chev.open {
+  transform: rotate(90deg);
+}
+
+section.sec-collapsed {
+  margin-bottom: -6px;
+  flex: none !important;
+}
+
+/* ---- material section ---- */
+
+.mat-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mat-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+input[type='color'] {
+  width: 32px;
+  height: 26px;
+  padding: 1px 2px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  cursor: pointer;
 }
 
 .brand-title {

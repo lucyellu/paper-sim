@@ -3,11 +3,12 @@ import { buildCarton } from '../model/carton'
 import { buildGableCarton } from '../model/gable'
 import { buildPanelTree, type PanelTree, type PaperDoc } from '../model/document'
 import { fromFoldFile, toFoldFile } from '../model/foldfile'
+import { defaultMaterial, type MaterialSettings } from '../model/material'
 import { nextExportName, projectNameFromFileName } from '../model/naming'
+import { templateSteps } from '../model/templates'
 import {
   applyOp,
   cloneEditable,
-  emptyEditable,
   isDeformerOp,
   newStepId,
   replay,
@@ -54,6 +55,8 @@ export interface AppState {
   editorMode: EditorMode
   /** Whole-object orientation in the 3D view, degrees (XYZ euler). */
   objectRotation: ObjectRotation
+  /** Sheet look: base color / paper texture / design overlay (UV = dieline). */
+  material: MaterialSettings
 
   dispatch: (op: Op, opts?: { alreadyApplied?: boolean }) => void
   setAngleTransient: (edgeId: number, deg: number) => void
@@ -63,6 +66,8 @@ export interface AppState {
   canUndo: () => boolean
   canRedo: () => boolean
   selectFace: (id: number | null, additive?: boolean) => void
+  /** Replace the selection with `ids` (last id becomes primary). */
+  selectFaces: (ids: number[]) => void
   addKeyframe: () => void
   /** Truncate steps after `index` and continue editing from that state. -1 = flat. */
   editFromStep: (index: number) => void
@@ -85,6 +90,7 @@ export interface AppState {
   setEditorMode: (mode: EditorMode) => void
   setObjectRotation: (rot: ObjectRotation) => void
   rotateObject: (axis: keyof ObjectRotation, deltaDeg: number) => void
+  setMaterial: (material: MaterialSettings) => void
   newDocument: (template?: Template) => void
   saveFile: () => void
   loadFile: (json: unknown, fileName: string) => void
@@ -96,6 +102,7 @@ function buildTemplate(template: Template): PaperDoc {
 
 export const useAppStore = create<AppState>((set, get) => {
   const initialDoc = buildTemplate('tuck')
+  const initialSteps = templateSteps('tuck', initialDoc)
 
   /** Editable slice of the current state (what ops act on). */
   function editable(): EditableState {
@@ -122,8 +129,12 @@ export const useAppStore = create<AppState>((set, get) => {
     tree: buildPanelTree(initialDoc),
     baseDoc: initialDoc,
     angles: {},
-    steps: [],
-    history: { base: emptyEditable(), log: [], cursor: 0 },
+    steps: initialSteps,
+    history: {
+      base: { angles: {}, steps: initialSteps.map((st) => ({ ...st, angles: { ...st.angles } })) },
+      log: [],
+      cursor: 0,
+    },
     selection: [],
     playback: { mode: 'edit' },
     projectName: 'box',
@@ -131,6 +142,7 @@ export const useAppStore = create<AppState>((set, get) => {
     viewLayout: readPref<ViewLayout>('paperSim.layout', 'single', ['single', 'quad']),
     editorMode: '3d',
     objectRotation: { x: 0, y: 0, z: 0 },
+    material: defaultMaterial(),
 
     dispatch: (op, opts) => {
       const s = get()
@@ -197,6 +209,11 @@ export const useAppStore = create<AppState>((set, get) => {
       // Additive: toggle membership; newly added becomes primary (last).
       const without = s.selection.filter((f) => f !== id)
       set({ selection: without.length === s.selection.length ? [...s.selection, id] : without })
+    },
+
+    selectFaces: (ids) => {
+      const s = get()
+      set({ selection: ids.filter((id) => s.doc.faces.some((f) => f.id === id)) })
     },
 
     addKeyframe: () => {
@@ -334,26 +351,44 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ objectRotation: next })
     },
 
+    setMaterial: (material) => set({ material }),
+
     newDocument: (template = 'tuck') => {
       const doc = buildTemplate(template)
+      // Templates ship with authored fold steps (baked into the history base,
+      // not undoable): load the carton, press play, watch it fold.
+      const steps = templateSteps(template, doc)
       set({
         doc,
         tree: buildPanelTree(doc),
         baseDoc: doc,
         angles: {},
-        steps: [],
-        history: { base: emptyEditable(), log: [], cursor: 0 },
+        steps,
+        history: {
+          base: { angles: {}, steps: steps.map((st) => ({ ...st, angles: { ...st.angles } })) },
+          log: [],
+          cursor: 0,
+        },
         selection: [],
         playback: { mode: 'edit' },
         projectName: template === 'gable' ? 'milk carton' : 'box',
         objectRotation: { x: 0, y: 0, z: 0 },
+        material: defaultMaterial(),
         editorMode: '3d',
       })
     },
 
     saveFile: () => {
       const s = get()
-      const file = toFoldFile(s.doc, s.angles, s.steps, s.history, s.objectRotation, s.projectName)
+      const file = toFoldFile(
+        s.doc,
+        s.angles,
+        s.steps,
+        s.history,
+        s.objectRotation,
+        s.projectName,
+        s.material,
+      )
       const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -376,6 +411,7 @@ export const useAppStore = create<AppState>((set, get) => {
         playback: { mode: 'edit' },
         projectName: loaded.projectName ?? projectNameFromFileName(fileName),
         objectRotation: loaded.objectRotation,
+        material: loaded.material,
         editorMode: '3d',
       })
     },

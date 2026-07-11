@@ -27,7 +27,7 @@ await page.evaluate(() => {
 await page.waitForTimeout(500)
 
 const popupPromise = context.waitForEvent('page', { timeout: 15000 })
-await page.click('button:has-text("Instruction sheet")')
+await page.getByRole('button', { name: 'Instructions', exact: true }).click()
 const popup = await popupPromise
 await popup.waitForLoadState('domcontentloaded')
 const sheet = await popup.evaluate(() => ({

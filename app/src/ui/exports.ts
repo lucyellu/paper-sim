@@ -8,7 +8,13 @@ import { nextExportName, slugify } from '../model/naming'
 import type { Step } from '../model/ops'
 import { getDisplayAngles, type AppState } from '../state/store'
 import { captureAvailable, capturePoses } from '../viewer/capture'
+import { loadImage } from '../viewer/texture'
+import { Pdf, type RGB } from './pdf'
 import { buildZip, dataUrlBytes, type ZipEntry } from './zip'
+
+const PDF_INK: RGB = [0.23, 0.2, 0.15]
+const PDF_MUTED: RGB = [0.48, 0.42, 0.31]
+const PDF_LEGEND = 'solid = cut   ·   dashed blue = valley fold   ·   dashed red = mountain fold'
 
 /** Build a standalone SVG string of the dieline (cuts solid, creases dashed). */
 export function dielineSVG(doc: PaperDoc): string {
@@ -46,6 +52,112 @@ export function downloadBlob(blob: Blob, fileName: string): void {
   a.download = fileName
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/** Draw the dieline's line work into a rect of a PDF page (fit + centered). */
+function drawDielineInto(pdf: Pdf, doc: PaperDoc, x: number, y: number, w: number, h: number) {
+  const { min, max } = sheetBounds(doc)
+  const sw = Math.max(max.x - min.x, 0.001)
+  const sh = Math.max(max.y - min.y, 0.001)
+  const scale = Math.min(w / sw, h / sh)
+  const ox = x + (w - sw * scale) / 2 - min.x * scale
+  const oy = y + (h - sh * scale) / 2 - min.y * scale
+  const pos = (id: number) => doc.vertices.find((v) => v.id === id)!.pos
+  for (const e of doc.edges) {
+    const a = pos(e.v1)
+    const b = pos(e.v2)
+    const isCut = e.kind === 'cut'
+    const target = doc.targetAngles?.[e.id]
+    const color: RGB = isCut
+      ? PDF_INK
+      : (target ?? 0) < 0
+        ? [0.86, 0.15, 0.15]
+        : [0.15, 0.39, 0.92]
+    // PDF y grows upward, like the dieline's — no flip needed.
+    pdf.line(
+      ox + a.x * scale,
+      oy + a.y * scale,
+      ox + b.x * scale,
+      oy + b.y * scale,
+      isCut ? 1.1 : 0.8,
+      color,
+      isCut ? undefined : [3.5, 2.2],
+    )
+  }
+}
+
+/** The flat pattern as a printable one-page PDF (true vector line work). */
+export function dielinePDF(doc: PaperDoc, title: string): Blob {
+  const { min, max } = sheetBounds(doc)
+  const landscape = max.x - min.x > max.y - min.y
+  const [pw, ph] = landscape ? [842, 595] : [595, 842]
+  const pdf = new Pdf()
+  pdf.addPage(pw, ph)
+  const m = 48
+  pdf.text(m, ph - m, 16, `${title} — dieline`, { bold: true, color: PDF_INK })
+  pdf.text(m, ph - m - 16, 9, PDF_LEGEND, { color: PDF_MUTED })
+  drawDielineInto(pdf, doc, m, m, pw - 2 * m, ph - 2 * m - 34)
+  return pdf.save()
+}
+
+async function pngDataUrlToJpeg(
+  dataUrl: string,
+): Promise<{ bytes: Uint8Array; w: number; h: number }> {
+  const img = await loadImage(dataUrl)
+  const c = document.createElement('canvas')
+  c.width = img.width
+  c.height = img.height
+  const ctx = c.getContext('2d')!
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, c.width, c.height)
+  ctx.drawImage(img, 0, 0)
+  return { bytes: dataUrlBytes(c.toDataURL('image/jpeg', 0.9)), w: c.width, h: c.height }
+}
+
+/**
+ * The instruction sheet as a multi-page PDF: title + vector dieline, then a
+ * grid of step snapshots. Null if there are no steps.
+ */
+export async function instructionsPDF(
+  doc: PaperDoc,
+  steps: Step[],
+  title: string,
+): Promise<Blob | null> {
+  if (steps.length === 0) return null
+  const poses = [{}, ...steps.map((st) => st.angles)]
+  const shots = await Promise.all(capturePoses(poses, { w: 720, h: 540 }).map(pngDataUrlToJpeg))
+
+  const pdf = new Pdf()
+  const pw = 595
+  const ph = 842
+  const m = 48
+  pdf.addPage(pw, ph)
+  pdf.text(m, ph - m, 18, `${title} — folding instructions`, { bold: true, color: PDF_INK })
+  pdf.text(m, ph - m - 16, 9, PDF_LEGEND, { color: PDF_MUTED })
+  pdf.text(m, ph - m - 44, 12, 'Dieline', { bold: true, color: PDF_INK })
+  drawDielineInto(pdf, doc, m, m, pw - 2 * m, ph - 2 * m - 62)
+
+  const cols = 2
+  const rows = 3
+  const gap = 16
+  const cellW = (pw - 2 * m - gap * (cols - 1)) / cols
+  const imgH = cellW * (540 / 720)
+  const cellH = imgH + 24
+  shots.forEach((shot, i) => {
+    const k = i % (cols * rows)
+    if (k === 0) {
+      pdf.addPage(pw, ph)
+      pdf.text(m, ph - m + 8, 12, 'Folding steps', { bold: true, color: PDF_INK })
+    }
+    const col = k % cols
+    const row = Math.floor(k / cols)
+    const x = m + col * (cellW + gap)
+    const yTop = ph - m - 16 - row * (cellH + gap)
+    pdf.imageJpeg(shot.bytes, shot.w, shot.h, x, yTop - imgH, cellW, imgH)
+    const label = i === 0 ? 'Start: flat sheet' : `${i}. ${steps[i - 1].name}`
+    pdf.text(x + 2, yTop - imgH - 14, 10, label, { color: PDF_INK })
+  })
+  return pdf.save()
 }
 
 /**
@@ -121,23 +233,42 @@ export function openInstructionSheet(doc: PaperDoc, steps: Step[], title: string
 
 /**
  * Download the whole project as a zip: a projectname/ folder holding the
- * .fold file (model + full history), the dieline SVG, a snapshot of the
- * current 3D pose, and the instruction sheet (when there are steps). The zip
- * name iterates per project so exports never overwrite each other.
- * Returns the file name it downloaded as.
+ * .fold file (model + full history), the dieline as SVG and PDF, a snapshot
+ * of the current 3D pose, and the instruction sheet as HTML and PDF (when
+ * there are steps). The zip name iterates per project so exports never
+ * overwrite each other. Returns the file name it downloaded as.
  */
-export function exportProjectBundle(s: AppState): string {
+export async function exportProjectBundle(s: AppState): Promise<string> {
   const slug = slugify(s.projectName)
-  const fold = toFoldFile(s.doc, s.angles, s.steps, s.history, s.objectRotation, s.projectName)
+  const fold = toFoldFile(
+    s.doc,
+    s.angles,
+    s.steps,
+    s.history,
+    s.objectRotation,
+    s.projectName,
+    s.material,
+  )
   const entries: ZipEntry[] = [
     { name: `${slug}/${slug}.fold`, data: JSON.stringify(fold, null, 2) },
     { name: `${slug}/${slug}_dieline.svg`, data: dielineSVG(s.doc) },
+    {
+      name: `${slug}/${slug}_dieline.pdf`,
+      data: new Uint8Array(await dielinePDF(s.doc, s.projectName).arrayBuffer()),
+    },
   ]
   if (captureAvailable()) {
     const png = capturePoses([getDisplayAngles(s)], { w: 1200, h: 900 })[0]
     entries.push({ name: `${slug}/${slug}_model.png`, data: dataUrlBytes(png) })
     const sheet = buildInstructionSheetHTML(s.doc, s.steps, s.projectName)
     if (sheet) entries.push({ name: `${slug}/${slug}_instructions.html`, data: sheet })
+    const pdf = await instructionsPDF(s.doc, s.steps, s.projectName)
+    if (pdf) {
+      entries.push({
+        name: `${slug}/${slug}_instructions.pdf`,
+        data: new Uint8Array(await pdf.arrayBuffer()),
+      })
+    }
   }
   const zipName = nextExportName(s.projectName, 'project', 'zip')
   downloadBlob(buildZip(entries), zipName)

@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { nextExportName } from '../model/naming'
 import { selectedHinge, selectedHinges, useAppStore, type AppState } from '../state/store'
-import { dielineSVG, downloadText, exportProjectBundle, openInstructionSheet } from './exports'
+import {
+  dielinePDF,
+  dielineSVG,
+  downloadBlob,
+  downloadText,
+  exportProjectBundle,
+  instructionsPDF,
+  openInstructionSheet,
+} from './exports'
+import { Section, SidePanel } from './panels'
 
 export function Sidebar() {
   const s = useAppStore()
@@ -31,14 +40,13 @@ export function Sidebar() {
   }
 
   return (
-    <div className="sidebar">
+    <SidePanel id="left" side="left" title="Paper Sim" defaultWidth={270}>
       <div className="brand">
         <span className="brand-title">Paper Sim</span>
         <span className="brand-sub">v1 — fold anything flat</span>
       </div>
 
-      <section>
-        <h3>File</h3>
+      <Section id="file" title="File">
         <div className="btn-row">
           <button onClick={() => newDoc('tuck', 'tuck box')}>New: Box</button>
           <button onClick={() => newDoc('gable', 'milk carton')}>New: Milk carton</button>
@@ -70,14 +78,14 @@ export function Sidebar() {
             }}
           />
         </label>
-      </section>
+      </Section>
 
-      <section>
-        <h3>Selection</h3>
+      <Section id="selection" title="Selection">
         {selectedFaces.length === 0 ? (
           <p className="hint">
-            Click a panel in the 3D view or the 2D pattern (Ctrl+click adds panels to fold
-            together). Press <b>F</b> to frame the model.
+            Click a panel to select it (Ctrl+click adds panels). <b>Double-click</b> selects its
+            whole row, <b>Shift+double-click</b> its column, <b>triple-click</b> the entire object.
+            Press <b>F</b> to frame.
           </p>
         ) : selectedFaces.length === 1 ? (
           <>
@@ -100,12 +108,11 @@ export function Sidebar() {
             )}
           </>
         )}
-      </section>
+      </Section>
 
-      <ObjectControl />
-      <ExportPanel />
-      <StepsPanel />
-    </div>
+      <ExportSection />
+      <StepsSection />
+    </SidePanel>
   )
 }
 
@@ -306,45 +313,10 @@ function GroupAngleControl({ hinges, disabled }: { hinges: number[]; disabled: b
   )
 }
 
-function ObjectControl() {
-  const s = useAppStore()
-  const rot = s.objectRotation
-  const axes: Array<keyof typeof rot> = ['x', 'y', 'z']
-  return (
-    <section>
-      <h3>Object</h3>
-      <div className="object-rows">
-        {axes.map((axis) => (
-          <div className="btn-row object-row" key={axis}>
-            <span className="axis-label">{axis.toUpperCase()}</span>
-            <button onClick={() => s.rotateObject(axis, -90)}>−90°</button>
-            <button onClick={() => s.rotateObject(axis, 90)}>+90°</button>
-            <span className="axis-val">{rot[axis]}°</span>
-          </div>
-        ))}
-      </div>
-      <div className="btn-row">
-        <button
-          className="subtle"
-          disabled={rot.x === 0 && rot.y === 0 && rot.z === 0}
-          onClick={() => s.setObjectRotation({ x: 0, y: 0, z: 0 })}
-        >
-          Reset orientation
-        </button>
-      </div>
-      <p className="hint">
-        Rotates the whole model (e.g. stand the carton upright). It always re-centers and rests on
-        the ground.
-      </p>
-    </section>
-  )
-}
-
-function ExportPanel() {
+function ExportSection() {
   const s = useAppStore()
   return (
-    <section>
-      <h3>Export</h3>
+    <Section id="export" title="Export">
       <div className="btn-row">
         <button
           title="Download the flat dieline as an SVG (cuts solid, folds dashed)"
@@ -359,7 +331,20 @@ function ExportPanel() {
           Dieline SVG
         </button>
         <button
-          title="Open a printable sheet: dieline + numbered snapshots of each fold step"
+          title="Download the flat dieline as a printable vector PDF"
+          onClick={() =>
+            downloadBlob(
+              dielinePDF(s.doc, s.projectName),
+              nextExportName(s.projectName, 'dieline', 'pdf'),
+            )
+          }
+        >
+          Dieline PDF
+        </button>
+      </div>
+      <div className="btn-row">
+        <button
+          title="Open a printable page: dieline + numbered snapshots of each fold step"
           onClick={() => {
             const state = useAppStore.getState() as AppState
             if (!openInstructionSheet(state.doc, state.steps, state.projectName)) {
@@ -367,13 +352,34 @@ function ExportPanel() {
             }
           }}
         >
-          Instruction sheet
+          Instructions
+        </button>
+        <button
+          title="Download the instruction sheet as a printable PDF"
+          onClick={() => {
+            const state = useAppStore.getState() as AppState
+            instructionsPDF(state.doc, state.steps, state.projectName)
+              .then((pdf) => {
+                if (!pdf) {
+                  alert('Record at least one keyframe first — the sheet shows one image per step.')
+                  return
+                }
+                downloadBlob(pdf, nextExportName(state.projectName, 'instructions', 'pdf'))
+              })
+              .catch((e) => alert(`PDF export failed: ${e}`))
+          }}
+        >
+          Instructions PDF
         </button>
       </div>
       <div className="btn-row">
         <button
-          title="Download everything as a zip: .fold project, dieline SVG, 3D snapshot, and instruction sheet"
-          onClick={() => exportProjectBundle(useAppStore.getState() as AppState)}
+          title="Download everything as a zip: .fold project, dieline SVG + PDF, 3D snapshot, instructions HTML + PDF"
+          onClick={() => {
+            exportProjectBundle(useAppStore.getState() as AppState).catch((e) =>
+              alert(`Export failed: ${e}`),
+            )
+          }}
         >
           Export project (zip)
         </button>
@@ -382,11 +388,11 @@ function ExportPanel() {
         Files are numbered per project (e.g. <i>carton_dieline_001.svg</i>) so repeat exports never
         overwrite. The zip unpacks into a project-name folder.
       </p>
-    </section>
+    </Section>
   )
 }
 
-function StepsPanel() {
+function StepsSection() {
   const s = useAppStore()
   const editMode = s.playback.mode === 'edit'
   const n = s.steps.length
@@ -411,8 +417,7 @@ function StepsPanel() {
   }
 
   return (
-    <section className="steps">
-      <h3>Fold steps</h3>
+    <Section id="steps" title={`Fold steps${n > 0 ? ` (${n})` : ''}`} className="steps">
       {n === 0 && (
         <p className="hint">
           Fold some panels, then press <b>Add Keyframe</b> to record a step. Steps play back in
@@ -460,6 +465,6 @@ function StepsPanel() {
           ↺ Restart from flat
         </button>
       )}
-    </section>
+    </Section>
   )
 }

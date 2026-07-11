@@ -6,10 +6,11 @@ import { useAppStore } from './state/store'
 import { fromFoldFile, toFoldFile } from './model/foldfile'
 import { buildCarton } from './model/carton'
 import { buildGableCarton } from './model/gable'
-import { buildPanelTree } from './model/document'
+import { buildPanelTree, columnFaceIds, rowFaceIds } from './model/document'
 import { computeFaceMatrices, degToRad } from './model/fold'
 import * as editing from './model/editing'
-import { dielineSVG } from './ui/exports'
+import { templateSteps } from './model/templates'
+import { dielinePDF, dielineSVG, instructionsPDF } from './ui/exports'
 
 // Dev-only handle for scripted smoke tests (scripts/verify*.mjs).
 if (import.meta.env.DEV) {
@@ -24,6 +25,11 @@ if (import.meta.env.DEV) {
     degToRad,
     editing,
     dielineSVG,
+    dielinePDF,
+    instructionsPDF,
+    rowFaceIds,
+    columnFaceIds,
+    templateSteps,
   }
 }
 

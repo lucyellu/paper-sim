@@ -280,6 +280,23 @@ export function PatternEditor() {
             />
           )
         })}
+        {/* design overlay reference (the dieline is the object's UV map) */}
+        {s.material.overlayImage &&
+          (() => {
+            const { min, max } = sheetBounds(doc)
+            return (
+              <image
+                href={s.material.overlayImage}
+                x={min.x}
+                y={-max.y}
+                width={max.x - min.x}
+                height={max.y - min.y}
+                preserveAspectRatio="none"
+                opacity={0.85}
+                pointerEvents="none"
+              />
+            )
+          })()}
         {/* edges */}
         {doc.edges.map((e) => {
           const a = vertexById(doc, e.v1).pos

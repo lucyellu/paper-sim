@@ -5,6 +5,7 @@
 // long as they carry faces_vertices.
 
 import type { Edge, Face, PaperDoc, Vertex } from './document'
+import { sanitizeMaterial, type MaterialSettings } from './material'
 import type { HistoryData, Step } from './ops'
 import { replay } from './ops'
 
@@ -33,6 +34,7 @@ export interface SaveFile {
   'paperSim:steps': Step[]
   'paperSim:history': HistoryData
   'paperSim:objectRotation'?: ObjectRotationData
+  'paperSim:material'?: MaterialSettings
 }
 
 export function toFoldFile(
@@ -42,6 +44,7 @@ export function toFoldFile(
   history: HistoryData,
   objectRotation?: ObjectRotationData,
   projectName?: string,
+  material?: MaterialSettings,
 ): SaveFile {
   const vIndex = new Map<number, number>()
   doc.vertices.forEach((v, i) => vIndex.set(v.id, i))
@@ -79,6 +82,7 @@ export function toFoldFile(
     'paperSim:steps': steps,
     'paperSim:history': history,
     'paperSim:objectRotation': objectRotation,
+    'paperSim:material': material,
   }
 }
 
@@ -90,6 +94,7 @@ export interface LoadedFile {
   angles: Record<number, number>
   steps: Step[]
   objectRotation: ObjectRotationData
+  material: MaterialSettings
   /** file_title if the file carries one; the loader falls back to the file name. */
   projectName?: string
 }
@@ -148,6 +153,7 @@ function fromPaperSimFile(f: SaveFile): LoadedFile {
     angles: state.angles,
     steps: state.steps,
     objectRotation: f['paperSim:objectRotation'] ?? { x: 0, y: 0, z: 0 },
+    material: sanitizeMaterial(f['paperSim:material']),
     projectName: f.file_title,
   }
 }
@@ -216,6 +222,7 @@ function fromForeignFold(f: Partial<SaveFile>): LoadedFile {
     angles: {},
     steps: [],
     objectRotation: { x: 0, y: 0, z: 0 },
+    material: sanitizeMaterial(f['paperSim:material']),
     projectName: typeof f.file_title === 'string' && f.file_title ? f.file_title : undefined,
   }
 }

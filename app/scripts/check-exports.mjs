@@ -36,9 +36,15 @@ async function grab(clickLabel) {
 
 await grab('Dieline SVG')
 await grab('Dieline SVG') // second export must iterate, not overwrite
+const pdfDl = await grab('Dieline PDF')
+const instrPdfDl = await grab('Instructions PDF')
 await grab('Save')
 const zipDl = await grab('Export project (zip)')
 const zipPath = await zipDl.path()
+
+const pdfMagic = readFileSync(await pdfDl.path()).slice(0, 5).toString() === '%PDF-'
+const instrPdfBytes = readFileSync(await instrPdfDl.path())
+const instrPdfMagic = instrPdfBytes.slice(0, 5).toString() === '%PDF-'
 
 // List the zip's central-directory entries (store-method zip we wrote ourselves).
 const buf = readFileSync(zipPath)
@@ -70,22 +76,30 @@ const roundtrip = await page.evaluate(() => {
 const expectNames = [
   'test-carton_dieline_001.svg',
   'test-carton_dieline_002.svg',
+  'test-carton_dieline_001.pdf',
+  'test-carton_instructions_001.pdf',
   'test-carton_001.fold',
   'test-carton_project_001.zip',
 ]
 const expectZip = [
   'test-carton/test-carton.fold',
   'test-carton/test-carton_dieline.svg',
+  'test-carton/test-carton_dieline.pdf',
   'test-carton/test-carton_model.png',
   'test-carton/test-carton_instructions.html',
+  'test-carton/test-carton_instructions.pdf',
 ]
 const pass =
   JSON.stringify(names) === JSON.stringify(expectNames) &&
   JSON.stringify(zipEntries) === JSON.stringify(expectZip) &&
+  pdfMagic &&
+  instrPdfMagic &&
   roundtrip.fromTitle === 'Test Carton' &&
   roundtrip.fromFileName === 'my-carton' &&
   errors.length === 0
 
-console.log(JSON.stringify({ names, zipEntries, roundtrip, errors, pass }, null, 2))
+console.log(
+  JSON.stringify({ names, zipEntries, pdfMagic, instrPdfMagic, roundtrip, errors, pass }, null, 2),
+)
 await browser.close()
 process.exit(pass ? 0 : 1)
