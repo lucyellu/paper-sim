@@ -20,18 +20,8 @@ export function DetailsPanel() {
         <SelectionDetails />
       </Section>
 
-      {/* In edge mode the ring reshape is the relevant control — show it first. */}
-      {s.selectMode === 'edge' && s.selectedEdges.length > 0 ? (
-        <>
-          <EdgeRingSection />
-          <TransformSection />
-        </>
-      ) : (
-        <>
-          <TransformSection />
-          <EdgeRingSection />
-        </>
-      )}
+      {/* One transform box, titled + scoped to the active select mode. */}
+      <TransformSection />
       <MaterialSection />
 
       <Section id="history" title={`History (${s.history.log.length})`} className="history">
@@ -159,7 +149,28 @@ function NumberCell({
   )
 }
 
+/**
+ * The transform box, titled + scoped to the active select mode (Maya-style):
+ * Object/Face show the whole-object move/rotate/scale; Edge shows the selected
+ * ring's reshape. (A single rigid face can't be freely translated in a
+ * fold model, so Face mode transforms the whole object and folds via hinges.)
+ */
 function TransformSection() {
+  const s = useAppStore()
+  const title =
+    s.selectMode === 'edge'
+      ? 'Edge transform'
+      : s.selectMode === 'face'
+        ? 'Face transform'
+        : 'Object transform'
+  return (
+    <Section id="object" title={title}>
+      {s.selectMode === 'edge' ? <EdgeRingBody /> : <ObjectTransformBody face={s.selectMode === 'face'} />}
+    </Section>
+  )
+}
+
+function ObjectTransformBody({ face }: { face: boolean }) {
   const s = useAppStore()
   const t = s.transform
   const axes: Array<keyof typeof t.translate> = ['x', 'y', 'z']
@@ -173,7 +184,13 @@ function TransformSection() {
     t.scale === 1
 
   return (
-    <Section id="object" title="Object transform">
+    <>
+      {face && (
+        <p className="hint" style={{ marginTop: 0 }}>
+          A single panel can’t be freely moved in a fold model — this moves the <b>whole object</b>.
+          To fold the selected panel, drag its hinge ring in the 3D view.
+        </p>
+      )}
       <div className="xform-grid">
         <span className="xform-head" />
         <span className="xform-head">X</span>
@@ -232,10 +249,10 @@ function TransformSection() {
       </div>
       <p className="hint">
         Moves / rotates / scales the <b>whole object</b>. Press <b>W</b>/<b>E</b>/<b>R</b> for the
-        gizmo in the 3D view (in Object or Face mode). For a single edge ring, switch to <b>Edge</b>
-        mode (3) — then W drags the ring to resize the model.
+        gizmo in the 3D view. For a single edge ring, switch to <b>Edge</b> mode (3) — then W drags
+        the ring to resize the model.
       </p>
-    </Section>
+    </>
   )
 }
 
@@ -244,16 +261,15 @@ function round(n: number): number {
 }
 
 /**
- * Edge-ring reshape: with edges selected in edge mode, nudge the ring along its
- * own axis to resize the model (e.g. shorten a carton). Drives the underlying
- * dieline vertices and refolds — the same thing the in-view drag does, but exact.
+ * Edge-ring reshape body (shown as "Edge transform" in edge mode): nudge the
+ * selected ring along its own axis to resize the model (e.g. shorten a carton).
+ * Drives the underlying dieline vertices and refolds — the same thing the
+ * in-view drag does, but exact. Works on a folded pose too (dieline edit).
  */
-function EdgeRingSection() {
+function EdgeRingBody() {
   const s = useAppStore()
-  // Reshape is a dieline edit, so it also works on a folded (scrubbed) pose —
-  // only block it during active playback.
+  // Only block during active playback.
   const editMode = !(s.playback.mode === 'scrub' && s.playback.playing)
-  if (s.selectMode !== 'edge' || s.selectedEdges.length === 0) return null
 
   function nudge(amount: number) {
     const st = useAppStore.getState()
@@ -265,13 +281,21 @@ function EdgeRingSection() {
     }
   }
 
+  if (s.selectedEdges.length === 0) {
+    return (
+      <p className="hint" style={{ marginTop: 0 }}>
+        No edge selected. Click an edge, or <b>double-click</b> one to select its whole ring, then
+        move it here (or drag the orange arrow in the 3D view) to resize the model.
+      </p>
+    )
+  }
+
   return (
-    <Section id="edgering" title="Edge ring">
+    <>
       <div className="sel-name">{s.selectedEdges.length} edge(s) selected</div>
       <p className="hint">
-        This resizes the <b>selected ring</b> (not the whole object). Move it along its axis to
-        resize the model (outward grows, inward shrinks). With the <b>Move</b> tool (W) drag the
-        orange arrow — or the ring itself — in the 3D view.
+        Resizes the <b>selected ring</b>. Move it along its axis (outward grows, inward shrinks).
+        With the <b>Move</b> tool (W) drag the orange arrow — or the ring itself — in the 3D view.
       </p>
       <div className="btn-row presets">
         <button disabled={!editMode} onClick={() => nudge(-1)} title="Move ring inward 1 unit">
@@ -288,7 +312,7 @@ function EdgeRingSection() {
         </button>
       </div>
       <MoveByField onApply={nudge} disabled={!editMode} />
-    </Section>
+    </>
   )
 }
 
