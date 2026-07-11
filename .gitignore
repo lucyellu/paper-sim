@@ -11,5 +11,8 @@ reference/
 assets/
 PackCAD_screenshot*.png
 paperstar.jpg
+# stray desktop screenshots / scratch images dropped in the repo root
+Screenshot*.png
+main.*.jpg
 
 *.log

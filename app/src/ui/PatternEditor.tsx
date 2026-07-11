@@ -11,9 +11,10 @@ import {
   type EditResult,
 } from '../model/editing'
 import { sheetBounds, vertexById, type Vec2 } from '../model/document'
+import { identityOverlayTransform, type OverlayTransform } from '../model/material'
 import { getDisplayAngles, useAppStore } from '../state/store'
 
-type Tool = 'select' | 'crease' | 'cut' | 'delete'
+type Tool = 'select' | 'crease' | 'cut' | 'delete' | 'texture' | 'trace'
 
 interface ViewBox {
   x: number
@@ -40,6 +41,10 @@ export function PatternEditor() {
   const [start, setStart] = useState<SnapHit | null>(null)
   const [selEdge, setSelEdge] = useState<number | null>(null)
   const [dragVertex, setDragVertex] = useState<{ id: number; pos: Vec2 } | null>(null)
+  const [texDrag, setTexDrag] = useState<{ startDoc: Vec2; start: OverlayTransform } | null>(null)
+  const [bgDrag, setBgDrag] = useState<{ startDoc: Vec2; startX: number; startY: number } | null>(
+    null,
+  )
   const [pan, setPan] = useState<{ px: number; py: number; view: ViewBox } | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
@@ -180,6 +185,32 @@ export function PatternEditor() {
       setDragVertex({ id: dragVertex.id, pos: toDoc(e) })
       return
     }
+    if (bgDrag && s.backdrop) {
+      const cur = toDoc(e)
+      s.setBackdrop({
+        ...s.backdrop,
+        x: bgDrag.startX + (cur.x - bgDrag.startDoc.x),
+        y: bgDrag.startY + (cur.y - bgDrag.startDoc.y),
+      })
+      return
+    }
+    if (texDrag) {
+      const { min, max } = sheetBounds(doc)
+      const sw = Math.max(max.x - min.x, 0.001)
+      const sh = Math.max(max.y - min.y, 0.001)
+      const cur = toDoc(e)
+      const t = texDrag.start
+      // offsetX follows +x; offsetY grows downward in the sheet, so it follows -y.
+      s.setMaterial({
+        ...s.material,
+        overlayTransform: {
+          ...t,
+          offsetX: t.offsetX + (cur.x - texDrag.startDoc.x) / sw,
+          offsetY: t.offsetY - (cur.y - texDrag.startDoc.y) / sh,
+        },
+      })
+      return
+    }
     if (tool === 'crease' || tool === 'cut') {
       setHover(snapPoint(doc, toDoc(e), pxTolerance(16)))
     }
@@ -193,6 +224,14 @@ export function PatternEditor() {
     if (dragVertex) {
       commit('move point', moveVertex(doc, dragVertex.id, dragVertex.pos))
       setDragVertex(null)
+      return
+    }
+    if (texDrag) {
+      setTexDrag(null)
+      return
+    }
+    if (bgDrag) {
+      setBgDrag(null)
       return
     }
     void e
@@ -261,6 +300,26 @@ export function PatternEditor() {
         onWheel={onWheel}
         onContextMenu={(e) => e.preventDefault()}
       >
+        {/* tracing backdrop (behind everything) */}
+        {s.backdrop && (
+          <image
+            href={s.backdrop.image}
+            x={s.backdrop.x}
+            y={-s.backdrop.y}
+            width={s.backdrop.w}
+            height={s.backdrop.h}
+            opacity={s.backdrop.opacity}
+            preserveAspectRatio="none"
+            pointerEvents={tool === 'trace' ? 'auto' : 'none'}
+            style={{ cursor: tool === 'trace' ? 'move' : 'default' }}
+            onPointerDown={(ev) => {
+              if (tool !== 'trace' || ev.button !== 0) return
+              ev.stopPropagation()
+              ;(ev.target as Element).setPointerCapture(ev.pointerId)
+              setBgDrag({ startDoc: toDoc(ev), startX: s.backdrop!.x, startY: s.backdrop!.y })
+            }}
+          />
+        )}
         {/* faces */}
         {doc.faces.map((f) => {
           const pts = f.vertexIds
@@ -284,17 +343,51 @@ export function PatternEditor() {
         {s.material.overlayImage &&
           (() => {
             const { min, max } = sheetBounds(doc)
+            const sw = max.x - min.x
+            const sh = max.y - min.y
+            const ov = s.material.overlayTransform ?? identityOverlayTransform()
+            const iw = sw * ov.scaleX
+            const ih = sh * ov.scaleY
+            const ix = min.x + ov.offsetX * sw
+            const iy = -max.y + ov.offsetY * sh
+            const cx = ix + iw / 2
+            const cy = iy + ih / 2
+            const editing = tool === 'texture'
             return (
-              <image
-                href={s.material.overlayImage}
-                x={min.x}
-                y={-max.y}
-                width={max.x - min.x}
-                height={max.y - min.y}
-                preserveAspectRatio="none"
-                opacity={0.85}
-                pointerEvents="none"
-              />
+              <>
+                <image
+                  href={s.material.overlayImage}
+                  x={ix}
+                  y={iy}
+                  width={iw}
+                  height={ih}
+                  transform={`rotate(${ov.rotationDeg} ${cx} ${cy})`}
+                  preserveAspectRatio="none"
+                  opacity={editing ? 0.92 : 0.85}
+                  pointerEvents={editing ? 'auto' : 'none'}
+                  style={{ cursor: editing ? 'move' : 'default' }}
+                  onPointerDown={(ev) => {
+                    if (!editing || ev.button !== 0 || editingDisabled) return
+                    ev.stopPropagation()
+                    ;(ev.target as Element).setPointerCapture(ev.pointerId)
+                    setTexDrag({ startDoc: toDoc(ev), start: ov })
+                  }}
+                />
+                {editing && (
+                  <rect
+                    x={ix}
+                    y={iy}
+                    width={iw}
+                    height={ih}
+                    transform={`rotate(${ov.rotationDeg} ${cx} ${cy})`}
+                    fill="none"
+                    stroke="#ff9f1c"
+                    strokeWidth={strokeW * 1.5}
+                    strokeDasharray={`${strokeW * 4} ${strokeW * 3}`}
+                    pointerEvents="none"
+                  />
+                )}
+              </>
             )
           })()}
         {/* edges */}
@@ -387,6 +480,8 @@ export function PatternEditor() {
             ['crease', '⌁ Draw crease'],
             ['cut', '✂ Draw cut'],
             ['delete', '⌫ Delete line'],
+            ['texture', '🖼 Texture'],
+            ['trace', '📐 Trace'],
           ] as Array<[Tool, string]>
         ).map(([t, label]) => (
           <button
@@ -409,14 +504,22 @@ export function PatternEditor() {
       <p className="pe-hint">
         {editingDisabled
           ? 'Finish playback first (Resume editing) to edit the dieline.'
-          : tool === 'select'
-            ? 'Click a line to inspect it, a panel to select it, drag a point to move it. Wheel = zoom, right-drag = pan.'
-            : tool === 'delete'
-              ? 'Click a line between two panels to remove it (the panels merge).'
-              : start
-                ? 'Click the end point (snaps to points and lines). Esc cancels.'
-                : 'Click the start point on a panel edge or corner.'}
+          : tool === 'trace'
+            ? 'Load a dieline image, line it up, then use Draw crease / Draw cut to trace it into our format. The backdrop is a guide only — it is not saved.'
+            : tool === 'texture'
+            ? 'Drag the design to move it; set size / rotation at right. The dieline is the UV map — fit your art to the panels.'
+            : tool === 'select'
+              ? 'Click a line to inspect it, a panel to select it, drag a point to move it. Wheel = zoom, right-drag = pan.'
+              : tool === 'delete'
+                ? 'Click a line between two panels to remove it (the panels merge).'
+                : start
+                  ? 'Click the end point (snaps to points and lines). Esc cancels.'
+                  : 'Click the start point on a panel edge or corner.'}
       </p>
+
+      {tool === 'texture' && <TextureInspector />}
+
+      {tool === 'trace' && <BackdropInspector />}
 
       {/* line inspector */}
       {selEdgeObj && (
@@ -470,6 +573,211 @@ export function PatternEditor() {
       )}
 
       {toast && <div className="pe-toast">{toast}</div>}
+    </div>
+  )
+}
+
+/** UV-editor panel: place/size/rotate the design overlay to fit the dieline. */
+function TextureInspector() {
+  const s = useAppStore()
+  const m = s.material
+  const ov = m.overlayTransform ?? identityOverlayTransform()
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  function setOv(patch: Partial<OverlayTransform>) {
+    s.setMaterial({ ...m, overlayTransform: { ...ov, ...patch } })
+  }
+
+  async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const url = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(r.result as string)
+      r.onerror = () => reject(new Error('read failed'))
+      r.readAsDataURL(file)
+    }).catch(() => null)
+    if (url) s.setMaterial({ ...m, overlayImage: url })
+  }
+
+  const field = (label: string, key: keyof OverlayTransform, step: number) => (
+    <label className="tex-field">
+      <span>{label}</span>
+      <input
+        type="number"
+        step={step}
+        value={Math.round(ov[key] * 1000) / 1000}
+        onChange={(e) => {
+          const v = Number(e.target.value)
+          if (Number.isFinite(v)) setOv({ [key]: v } as Partial<OverlayTransform>)
+        }}
+      />
+    </label>
+  )
+
+  return (
+    <div className="pe-inspector tex-inspector">
+      <h4>Texture / UV</h4>
+      <div className="btn-row">
+        <button onClick={() => fileRef.current?.click()}>
+          {m.overlayImage ? 'Replace design…' : 'Add design…'}
+        </button>
+        {m.overlayImage && (
+          <button
+            title="Remove the design overlay"
+            onClick={() => s.setMaterial({ ...m, overlayImage: undefined })}
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      {m.overlayImage ? (
+        <>
+          <div className="tex-grid">
+            {field('Offset X', 'offsetX', 0.02)}
+            {field('Offset Y', 'offsetY', 0.02)}
+            {field('Scale X', 'scaleX', 0.05)}
+            {field('Scale Y', 'scaleY', 0.05)}
+            {field('Rotate°', 'rotationDeg', 5)}
+          </div>
+          <div className="btn-row">
+            <button
+              title="Reset the design to fill the whole dieline"
+              onClick={() => setOv(identityOverlayTransform())}
+            >
+              ⤢ Fit to dieline
+            </button>
+          </div>
+          <p className="pe-hint" style={{ position: 'static' }}>
+            Drag the image in the canvas to move it. Fit = fill the dieline (default).
+          </p>
+        </>
+      ) : (
+        <p className="pe-hint" style={{ position: 'static' }}>
+          Add a design image, then drag/size it to fit the dieline panels.
+        </p>
+      )}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={onPick}
+      />
+    </div>
+  )
+}
+
+/** Load + place a reference dieline image to trace over (session-only). */
+function BackdropInspector() {
+  const s = useAppStore()
+  const bg = s.backdrop
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  /** Fit a w:h rect inside the sheet bounds, centered. */
+  function fitRect(aspect: number) {
+    const { min, max } = sheetBounds(s.doc)
+    const sw = Math.max(max.x - min.x, 0.001)
+    const sh = Math.max(max.y - min.y, 0.001)
+    let w = sw
+    let h = w / aspect
+    if (h > sh) {
+      h = sh
+      w = h * aspect
+    }
+    return { x: min.x + (sw - w) / 2, y: max.y - (sh - h) / 2, w, h }
+  }
+
+  async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const url = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(r.result as string)
+      r.onerror = () => reject(new Error('read failed'))
+      r.readAsDataURL(file)
+    }).catch(() => null)
+    if (!url) return
+    const img = new Image()
+    img.onload = () => {
+      const aspect = img.naturalWidth / Math.max(1, img.naturalHeight)
+      const r = fitRect(aspect)
+      s.setBackdrop({ image: url, ...r, opacity: 0.5 })
+    }
+    img.src = url
+  }
+
+  function scale(f: number) {
+    if (!bg) return
+    const cx = bg.x + bg.w / 2
+    const cy = bg.y - bg.h / 2
+    const w = bg.w * f
+    const h = bg.h * f
+    s.setBackdrop({ ...bg, w, h, x: cx - w / 2, y: cy + h / 2 })
+  }
+
+  function refit() {
+    if (!bg) return
+    const r = fitRect(bg.w / Math.max(0.001, bg.h))
+    s.setBackdrop({ ...bg, ...r })
+  }
+
+  return (
+    <div className="pe-inspector tex-inspector">
+      <h4>Trace backdrop</h4>
+      <div className="btn-row">
+        <button onClick={() => fileRef.current?.click()}>
+          {bg ? 'Replace image…' : 'Load image…'}
+        </button>
+        {bg && (
+          <button title="Remove the tracing backdrop" onClick={() => s.setBackdrop(null)}>
+            ✕
+          </button>
+        )}
+      </div>
+      {bg ? (
+        <>
+          <div className="btn-row">
+            <button title="Shrink" onClick={() => scale(1 / 1.1)}>
+              − smaller
+            </button>
+            <button title="Grow" onClick={() => scale(1.1)}>
+              + bigger
+            </button>
+            <button title="Fit to the sheet bounds" onClick={refit}>
+              ⤢ Fit
+            </button>
+          </div>
+          <label className="tex-field" style={{ display: 'block' }}>
+            <span>Opacity</span>
+            <input
+              type="range"
+              min={0.1}
+              max={1}
+              step={0.05}
+              value={bg.opacity}
+              onChange={(e) => s.setBackdrop({ ...bg, opacity: Number(e.target.value) })}
+            />
+          </label>
+          <p className="pe-hint" style={{ position: 'static' }}>
+            Drag the image to line it up, then trace with Draw crease / Draw cut. Not saved in the
+            file.
+          </p>
+        </>
+      ) : (
+        <p className="pe-hint" style={{ position: 'static' }}>
+          Load one of your saved dieline images, scale/drag it onto the sheet, then draw over it.
+        </p>
+      )}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={onPick}
+      />
     </div>
   )
 }

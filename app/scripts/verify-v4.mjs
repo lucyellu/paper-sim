@@ -82,7 +82,7 @@ out.material = await page.evaluate(async () => {
 out.pdf = await page.evaluate(async () => {
   const { store, dielinePDF, instructionsPDF } = window.paperSim
   const s = store.getState()
-  const d = dielinePDF(s.doc, 'test')
+  const d = await dielinePDF(s.doc, 'test')
   const i = await instructionsPDF(s.doc, s.steps, 'test')
   return {
     dielineSize: d.size,
@@ -97,10 +97,11 @@ await page.click('.side-panel.right .panel-toggle')
 out.rightCollapsed = await page.isVisible('.side-panel.strip.right .panel-vtitle')
 await page.click('.side-panel.strip.right .panel-toggle')
 out.rightRestored = await page.isVisible('.side-panel.right .panel-scroll')
+// Collapse the first left section (Project) and confirm its body hides.
 const firstSection = page.locator('.side-panel.left section').first()
-const beforeSec = await firstSection.locator('.btn-row').count()
+const beforeSec = await firstSection.locator('.project-name-row').count()
 await page.locator('.side-panel.left .sec-head').first().click()
-const afterSec = await firstSection.locator('.btn-row').count()
+const afterSec = await firstSection.locator('.project-name-row').count()
 await page.locator('.side-panel.left .sec-head').first().click() // restore
 out.sectionCollapse = { beforeSec, afterSec }
 

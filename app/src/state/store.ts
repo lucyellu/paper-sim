@@ -1,11 +1,13 @@
 import { create } from 'zustand'
 import { buildCarton } from '../model/carton'
-import { buildGableCarton } from '../model/gable'
+import { buildGableCarton, type GableDims } from '../model/gable'
+import { buildCan, type CanDims } from '../model/can'
 import { buildPanelTree, type PanelTree, type PaperDoc } from '../model/document'
 import { fromFoldFile, toFoldFile } from '../model/foldfile'
 import { defaultMaterial, type MaterialSettings } from '../model/material'
 import { nextExportName, projectNameFromFileName } from '../model/naming'
 import { templateSteps } from '../model/templates'
+import { identityTransform, type Transform, type Vec3 } from '../model/transform'
 import {
   applyOp,
   cloneEditable,
@@ -23,12 +25,28 @@ export type Playback = { mode: 'edit' } | { mode: 'scrub'; t: number; playing: b
 export type Theme = 'light' | 'dark'
 export type ViewLayout = 'single' | 'quad'
 export type EditorMode = '3d' | 'pattern'
-export type Template = 'tuck' | 'gable'
-export interface ObjectRotation {
+/**
+ * A reference image shown behind the dieline editor for tracing an imported
+ * dieline into our format. Rect is in flat/doc coords: (x, y) = top-left corner
+ * (y grows up), w/h in doc units. Session-only — not saved in the .fold file.
+ */
+export interface Backdrop {
+  image: string
   x: number
   y: number
-  z: number
+  w: number
+  h: number
+  opacity: number
 }
+export type Template = 'tuck' | 'gable' | 'can'
+/** Optional dimensions when creating a template (rectangular gable, can size). */
+export type TemplateDims = GableDims | CanDims
+/** Which component the pointer selects in the 3D view (Maya-style). */
+export type SelectMode = 'object' | 'face' | 'edge'
+/** Active manipulator (Maya Q/W/E/R): none, translate, rotate, scale. */
+export type TransformTool = 'select' | 'move' | 'rotate' | 'scale'
+/** Back-compat alias (old save files persisted just a rotation). */
+export type ObjectRotation = Vec3
 
 function readPref<T extends string>(key: string, fallback: T, valid: T[]): T {
   if (typeof window === 'undefined') return fallback
@@ -47,20 +65,30 @@ export interface AppState {
   history: HistoryData
   /** Selected face ids; the LAST one is the primary selection. */
   selection: number[]
+  /** Selected edge ids (edge select mode); the LAST one is primary. */
+  selectedEdges: number[]
+  /** Which component the pointer picks: whole object / face / edge. */
+  selectMode: SelectMode
+  /** Active transform manipulator (Q/W/E/R). */
+  transformTool: TransformTool
   playback: Playback
   /** User-facing project name; drives export file names (slugified). */
   projectName: string
   theme: Theme
   viewLayout: ViewLayout
   editorMode: EditorMode
-  /** Whole-object orientation in the 3D view, degrees (XYZ euler). */
-  objectRotation: ObjectRotation
+  /** Whole-object placement transform (translate + rotate + uniform scale). */
+  transform: Transform
   /** Sheet look: base color / paper texture / design overlay (UV = dieline). */
   material: MaterialSettings
+  /** Tracing reference behind the dieline editor (session-only). */
+  backdrop: Backdrop | null
 
   dispatch: (op: Op, opts?: { alreadyApplied?: boolean }) => void
   setAngleTransient: (edgeId: number, deg: number) => void
   setAnglesTransient: (angles: Record<number, number>) => void
+  /** Swap the doc + tree without touching history (live reshape preview). */
+  setDocTransient: (doc: PaperDoc) => void
   undo: () => void
   redo: () => void
   canUndo: () => boolean
@@ -68,6 +96,12 @@ export interface AppState {
   selectFace: (id: number | null, additive?: boolean) => void
   /** Replace the selection with `ids` (last id becomes primary). */
   selectFaces: (ids: number[]) => void
+  /** Select/toggle a single edge (edge mode); null clears. */
+  selectEdge: (id: number | null, additive?: boolean) => void
+  /** Replace the edge selection with `ids` (last id becomes primary). */
+  selectEdges: (ids: number[]) => void
+  setSelectMode: (mode: SelectMode) => void
+  setTransformTool: (tool: TransformTool) => void
   addKeyframe: () => void
   /** Truncate steps after `index` and continue editing from that state. -1 = flat. */
   editFromStep: (index: number) => void
@@ -88,16 +122,26 @@ export interface AppState {
   setTheme: (theme: Theme) => void
   setViewLayout: (layout: ViewLayout) => void
   setEditorMode: (mode: EditorMode) => void
-  setObjectRotation: (rot: ObjectRotation) => void
-  rotateObject: (axis: keyof ObjectRotation, deltaDeg: number) => void
+  setTransform: (patch: Partial<Transform>) => void
+  rotateObject: (axis: keyof Vec3, deltaDeg: number) => void
+  resetTransform: () => void
   setMaterial: (material: MaterialSettings) => void
-  newDocument: (template?: Template) => void
+  setBackdrop: (backdrop: Backdrop | null) => void
+  newDocument: (template?: Template, dims?: TemplateDims) => void
   saveFile: () => void
   loadFile: (json: unknown, fileName: string) => void
 }
 
-function buildTemplate(template: Template): PaperDoc {
-  return template === 'gable' ? buildGableCarton() : buildCarton()
+function buildTemplate(template: Template, dims?: TemplateDims): PaperDoc {
+  if (template === 'gable') return buildGableCarton(dims as GableDims | undefined)
+  if (template === 'can') return buildCan(dims as CanDims | undefined)
+  return buildCarton()
+}
+
+function defaultProjectName(template: Template): string {
+  if (template === 'gable') return 'milk carton'
+  if (template === 'can') return 'can'
+  return 'box'
 }
 
 export const useAppStore = create<AppState>((set, get) => {
@@ -136,13 +180,17 @@ export const useAppStore = create<AppState>((set, get) => {
       cursor: 0,
     },
     selection: [],
+    selectedEdges: [],
+    selectMode: 'face',
+    transformTool: 'select',
     playback: { mode: 'edit' },
     projectName: 'box',
     theme: readPref<Theme>('paperSim.theme', 'light', ['light', 'dark']),
     viewLayout: readPref<ViewLayout>('paperSim.layout', 'single', ['single', 'quad']),
     editorMode: '3d',
-    objectRotation: { x: 0, y: 0, z: 0 },
+    transform: identityTransform(),
     material: defaultMaterial(),
+    backdrop: null,
 
     dispatch: (op, opts) => {
       const s = get()
@@ -167,6 +215,16 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get()
       if (s.playback.mode !== 'edit') return
       set({ angles: { ...s.angles, ...angles } })
+    },
+
+    setDocTransient: (doc) => {
+      const s = get()
+      set({
+        doc,
+        tree: buildPanelTree(doc),
+        selection: s.selection.filter((id) => doc.faces.some((f) => f.id === id)),
+        selectedEdges: s.selectedEdges.filter((id) => doc.edges.some((e) => e.id === id)),
+      })
     },
 
     undo: () => {
@@ -215,6 +273,31 @@ export const useAppStore = create<AppState>((set, get) => {
       const s = get()
       set({ selection: ids.filter((id) => s.doc.faces.some((f) => f.id === id)) })
     },
+
+    selectEdge: (id, additive) => {
+      const s = get()
+      if (id === null) {
+        set({ selectedEdges: [] })
+        return
+      }
+      if (!additive) {
+        set({ selectedEdges: [id] })
+        return
+      }
+      const without = s.selectedEdges.filter((e) => e !== id)
+      set({
+        selectedEdges:
+          without.length === s.selectedEdges.length ? [...s.selectedEdges, id] : without,
+      })
+    },
+
+    selectEdges: (ids) => {
+      const s = get()
+      set({ selectedEdges: ids.filter((id) => s.doc.edges.some((e) => e.id === id)) })
+    },
+
+    setSelectMode: (mode) => set({ selectMode: mode }),
+    setTransformTool: (tool) => set({ transformTool: tool }),
 
     addKeyframe: () => {
       const s = get()
@@ -342,19 +425,25 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setEditorMode: (mode) => set({ editorMode: mode }),
 
-    setObjectRotation: (rot) => set({ objectRotation: rot }),
+    setTransform: (patch) => {
+      const s = get()
+      set({ transform: { ...s.transform, ...patch } })
+    },
 
     rotateObject: (axis, deltaDeg) => {
       const s = get()
-      const next = { ...s.objectRotation }
-      next[axis] = ((next[axis] + deltaDeg) % 360 + 360) % 360
-      set({ objectRotation: next })
+      const rotateDeg = { ...s.transform.rotateDeg }
+      rotateDeg[axis] = (((rotateDeg[axis] + deltaDeg) % 360) + 360) % 360
+      set({ transform: { ...s.transform, rotateDeg } })
     },
 
-    setMaterial: (material) => set({ material }),
+    resetTransform: () => set({ transform: identityTransform() }),
 
-    newDocument: (template = 'tuck') => {
-      const doc = buildTemplate(template)
+    setMaterial: (material) => set({ material }),
+    setBackdrop: (backdrop) => set({ backdrop }),
+
+    newDocument: (template = 'tuck', dims) => {
+      const doc = buildTemplate(template, dims)
       // Templates ship with authored fold steps (baked into the history base,
       // not undoable): load the carton, press play, watch it fold.
       const steps = templateSteps(template, doc)
@@ -370,10 +459,12 @@ export const useAppStore = create<AppState>((set, get) => {
           cursor: 0,
         },
         selection: [],
+        selectedEdges: [],
         playback: { mode: 'edit' },
-        projectName: template === 'gable' ? 'milk carton' : 'box',
-        objectRotation: { x: 0, y: 0, z: 0 },
+        projectName: defaultProjectName(template),
+        transform: identityTransform(),
         material: defaultMaterial(),
+        backdrop: null,
         editorMode: '3d',
       })
     },
@@ -385,7 +476,7 @@ export const useAppStore = create<AppState>((set, get) => {
         s.angles,
         s.steps,
         s.history,
-        s.objectRotation,
+        s.transform,
         s.projectName,
         s.material,
       )
@@ -408,10 +499,12 @@ export const useAppStore = create<AppState>((set, get) => {
         steps: loaded.steps,
         history: loaded.history,
         selection: [],
+        selectedEdges: [],
         playback: { mode: 'edit' },
         projectName: loaded.projectName ?? projectNameFromFileName(fileName),
-        objectRotation: loaded.objectRotation,
+        transform: loaded.transform,
         material: loaded.material,
+        backdrop: null,
         editorMode: '3d',
       })
     },

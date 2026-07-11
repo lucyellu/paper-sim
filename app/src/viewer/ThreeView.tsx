@@ -1,13 +1,18 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import {
   columnFaceIds,
+  edgeRing,
+  edgesAxis,
+  edgesVertexIds,
   rowFaceIds,
   sheetBounds,
   type PanelTree,
   type PaperDoc,
 } from '../model/document'
+import { moveVertices } from '../model/editing'
 import { computeFaceMatrices, degToRad, radToDeg } from '../model/fold'
 import {
   getDisplayAngles,
@@ -62,6 +67,19 @@ interface DragState {
   moved: boolean
 }
 
+/** Live edge-ring reshape: drag moves the ring's dieline vertices along a flat axis. */
+interface ReshapeState {
+  docAtStart: PaperDoc
+  vertexIds: number[]
+  /** Unit flat-space direction the ring vertices move along. */
+  axisFlat: { x: number; y: number }
+  /** That axis in current-pose world space (for projecting the drag). */
+  worldAxis: THREE.Vector3
+  plane: THREE.Plane
+  start: THREE.Vector3
+  scale: number
+}
+
 export function ThreeView() {
   const mountRef = useRef<HTMLDivElement>(null)
   const perspRef = useRef<HTMLDivElement>(null)
@@ -100,15 +118,20 @@ export function ThreeView() {
       return g
     }
 
-    // Hierarchy: pivotGroup (auto-centering) > orientGroup (whole-object
-    // rotation) > modelGroup (sheet-to-world: flat xy plane -> ground plane).
+    // Hierarchy: placementGroup (user translate) > pivotGroup (auto-centering)
+    // > orientGroup (whole-object rotate + uniform scale) > modelGroup
+    // (sheet-to-world: flat xy plane -> ground plane). Rotate/scale live inside
+    // the pivot so the model stays centered and grounded; translate is a free
+    // scene offset on top.
+    const placementGroup = new THREE.Group()
     const pivotGroup = new THREE.Group()
     const orientGroup = new THREE.Group()
     const modelGroup = new THREE.Group()
     modelGroup.rotation.x = -Math.PI / 2
     orientGroup.add(modelGroup)
     pivotGroup.add(orientGroup)
-    scene.add(pivotGroup)
+    placementGroup.add(pivotGroup)
+    scene.add(placementGroup)
 
     // ---- views -----------------------------------------------------------
     function makeView(key: ViewKey, cell: HTMLDivElement): View {
@@ -180,6 +203,7 @@ export function ThreeView() {
     let faceMeshes = new Map<number, THREE.Mesh>()
     let creaseLines = new Map<number, THREE.Line>()
     let facePoints = new Map<number, THREE.Vector3[]>() // flat verts per face
+    let edgeProxies = new Map<number, THREE.Mesh>() // edgeId -> pick/highlight tube
 
     const gizmo = new THREE.Group()
     const ring = new THREE.Mesh(
@@ -213,6 +237,20 @@ export function ThreeView() {
       faceMeshes = new Map()
       creaseLines = new Map()
       facePoints = new Map()
+      edgeProxies = new Map()
+    }
+
+    /** The face that owns an edge (has its two vertices consecutive in the loop). */
+    function ownerFaceId(doc: PaperDoc, v1: number, v2: number): number | null {
+      for (const f of doc.faces) {
+        const n = f.vertexIds.length
+        for (let i = 0; i < n; i++) {
+          const a = f.vertexIds[i]
+          const b = f.vertexIds[(i + 1) % n]
+          if ((a === v1 && b === v2) || (a === v2 && b === v1)) return f.id
+        }
+      }
+      return null
     }
 
     function buildModel(doc: PaperDoc, tree: PanelTree) {
@@ -267,6 +305,29 @@ export function ThreeView() {
         faceMeshes.get(fid)!.add(line)
         creaseLines.set(node.hingeEdgeId, line)
       }
+      // Per-edge pick/highlight tubes: thin cylinders along each edge, parented
+      // to the face that owns the edge so they follow the fold. Invisible until
+      // hovered/selected; used for edge-mode picking.
+      const yAxis = new THREE.Vector3(0, 1, 0)
+      for (const e of doc.edges) {
+        const owner = ownerFaceId(doc, e.v1, e.v2)
+        if (owner === null) continue
+        const p1 = doc.vertices.find((v) => v.id === e.v1)!.pos
+        const p2 = doc.vertices.find((v) => v.id === e.v2)!.pos
+        const len = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 0.001
+        const tube = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.08, 0.08, len, 6),
+          new THREE.MeshBasicMaterial({ color: CREASE_SELECTED, depthTest: false }),
+        )
+        tube.material.visible = false
+        tube.renderOrder = 998
+        const dir = new THREE.Vector3(p2.x - p1.x, p2.y - p1.y, 0).normalize()
+        tube.quaternion.setFromUnitVectors(yAxis, dir)
+        tube.position.set((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, PAPER_T / 2 + 0.02)
+        tube.userData.edgeId = e.id
+        faceMeshes.get(owner)!.add(tube)
+        edgeProxies.set(e.id, tube)
+      }
       const cx = (min.x + max.x) / 2
       const cy = (min.y + max.y) / 2
       modelGroup.position.set(-cx, 0, cy)
@@ -318,8 +379,28 @@ export function ThreeView() {
       if (s.doc !== currentDoc) {
         currentDoc = s.doc
         currentMaterial = s.material
+        // A live edge-ring reshape rebuilds the doc every move; keep the camera
+        // put (buildModel would otherwise snap views back to their home).
+        const cams = reshaping
+          ? views.map((v) => ({
+              p: v.camera.position.clone(),
+              t: v.controls.target.clone(),
+              z: v.camera instanceof THREE.OrthographicCamera ? v.camera.zoom : 1,
+            }))
+          : null
         buildModel(s.doc, s.tree)
         refreshSheetTexture() // sheet bounds (the UV frame) may have changed
+        if (cams) {
+          views.forEach((v, i) => {
+            v.camera.position.copy(cams[i].p)
+            v.controls.target.copy(cams[i].t)
+            if (v.camera instanceof THREE.OrthographicCamera) {
+              v.camera.zoom = cams[i].z
+              v.camera.updateProjectionMatrix()
+            }
+            v.controls.update()
+          })
+        }
       } else if (s.material !== currentMaterial) {
         currentMaterial = s.material
         refreshSheetTexture()
@@ -372,6 +453,10 @@ export function ThreeView() {
     const raycaster = new THREE.Raycaster()
     const ndc = new THREE.Vector2()
     let drag: DragState | null = null
+    let reshape: ReshapeState | null = null
+    // True while an edge-ring reshape is live: preserves camera across the doc
+    // rebuilds that reshape previews trigger.
+    let reshaping = false
     let downPos: { x: number; y: number } | null = null
     // Manual multi-click tracking (pointerup has no reliable click count).
     const clickChain = { t: 0, x: 0, y: 0, count: 0 }
@@ -445,6 +530,57 @@ export function ThreeView() {
       return out
     }
 
+    /**
+     * Set up an edge-ring reshape from the current selection. `ndc` must already
+     * be set to the pointer. Returns null if there's nothing draggable.
+     */
+    /**
+     * The selected edge ring's world centroid + reshape axis (following the
+     * fold). Used both to place the drag handle and to begin a reshape.
+     */
+    function edgeRingWorld(
+      s: ReturnType<typeof useAppStore.getState>,
+    ): { center: THREE.Vector3; worldAxis: THREE.Vector3; axisFlat: { x: number; y: number } } | null {
+      const edges = s.selectedEdges
+      if (edges.length === 0) return null
+      const axisFlat = edgesAxis(s.doc, edges)
+      const worldAxis = new THREE.Vector3()
+      const center = new THREE.Vector3()
+      const tmp = new THREE.Vector3()
+      let count = 0
+      for (const eid of edges) {
+        const proxy = edgeProxies.get(eid)
+        const owner = proxy?.parent as THREE.Mesh | undefined
+        if (!proxy || !owner) continue
+        owner.updateWorldMatrix(true, false)
+        worldAxis.add(new THREE.Vector3(axisFlat.x, axisFlat.y, 0).transformDirection(owner.matrixWorld))
+        center.add(proxy.getWorldPosition(tmp))
+        count++
+      }
+      if (count === 0 || worldAxis.lengthSq() === 0) return null
+      worldAxis.normalize()
+      center.multiplyScalar(1 / count)
+      return { center, worldAxis, axisFlat }
+    }
+
+    function beginReshape(
+      s: ReturnType<typeof useAppStore.getState>,
+      camera: THREE.Camera,
+    ): ReshapeState | null {
+      const vertexIds = edgesVertexIds(s.doc, s.selectedEdges)
+      if (vertexIds.length === 0) return null
+      const rw = edgeRingWorld(s)
+      if (!rw) return null
+      const { center, worldAxis, axisFlat } = rw
+      const camDir = new THREE.Vector3()
+      camera.getWorldDirection(camDir)
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, center)
+      raycaster.setFromCamera(ndc, camera)
+      const start = new THREE.Vector3()
+      if (!raycaster.ray.intersectPlane(plane, start)) return null
+      return { docAtStart: s.doc, vertexIds, axisFlat, worldAxis, plane, start, scale: s.transform.scale }
+    }
+
     function attachCellEvents(view: View) {
       const { cell, camera, controls } = view
 
@@ -452,7 +588,32 @@ export function ThreeView() {
         if (e.button !== 0) return
         downPos = { x: e.clientX, y: e.clientY }
         const s = useAppStore.getState()
-        if (s.playback.mode !== 'edit' || !gizmo.visible) return
+        // Edge-ring reshape: edge mode + Move tool, grab a selected edge (or the
+        // arrow handle) and drag it along the ring's axis to resize the model.
+        // This is a DIELINE edit, so it also works while the model is folded
+        // (scrubbed to a step) — the fold steps re-apply at the new size.
+        if (s.selectMode === 'edge' && s.transformTool === 'move' && s.selectedEdges.length > 0) {
+          setNdcForCell(e, cell)
+          raycaster.setFromCamera(ndc, camera)
+          const selProxies = s.selectedEdges
+            .map((id) => edgeProxies.get(id))
+            .filter((m): m is THREE.Mesh => !!m)
+          // Grab either the visible arrow handle or a selected edge tube.
+          const grabTargets = [...selProxies, ...(edgeHandle.visible ? handleMeshes : [])]
+          if (grabTargets.length > 0 && raycaster.intersectObjects(grabTargets, false).length > 0) {
+            const rs = beginReshape(s, camera)
+            if (rs) {
+              reshape = rs
+              reshaping = true
+              controls.enabled = false
+              cell.setPointerCapture(e.pointerId)
+              return
+            }
+          }
+        }
+        // Everything below folds hinges, which only makes sense at the edit head.
+        if (s.playback.mode !== 'edit') return
+        if (!gizmo.visible) return
         setNdcForCell(e, cell)
         raycaster.setFromCamera(ndc, camera)
         if (raycaster.intersectObject(gizmoPick, false).length === 0) return
@@ -484,6 +645,20 @@ export function ThreeView() {
       }
 
       function onPointerMove(e: PointerEvent) {
+        if (reshape) {
+          setNdcForCell(e, cell)
+          raycaster.setFromCamera(ndc, camera)
+          const hit = new THREE.Vector3()
+          if (!raycaster.ray.intersectPlane(reshape.plane, hit)) return
+          const along = hit.sub(reshape.start).dot(reshape.worldAxis)
+          const flatDist = reshape.scale !== 0 ? along / reshape.scale : along
+          const res = moveVertices(reshape.docAtStart, reshape.vertexIds, {
+            x: reshape.axisFlat.x * flatDist,
+            y: reshape.axisFlat.y * flatDist,
+          })
+          if ('doc' in res) useAppStore.getState().setDocTransient(res.doc)
+          return
+        }
         if (!drag) return
         setNdcForCell(e, cell)
         raycaster.setFromCamera(ndc, camera)
@@ -510,6 +685,20 @@ export function ThreeView() {
       }
 
       function onPointerUp(e: PointerEvent) {
+        if (reshape) {
+          const s = useAppStore.getState()
+          if (s.doc !== reshape.docAtStart) {
+            s.dispatch(
+              { type: 'setDoc', label: 'reshape edge ring', prev: reshape.docAtStart, next: s.doc },
+              { alreadyApplied: true },
+            )
+          }
+          reshape = null
+          reshaping = false
+          controls.enabled = true
+          downPos = null
+          return
+        }
         if (drag) {
           const s = useAppStore.getState()
           if (drag.moved) {
@@ -534,37 +723,67 @@ export function ThreeView() {
           downPos = null
           return
         }
+        // A transform-gizmo drag just ended: don't treat it as a click-select.
+        if (gizmoDragging) {
+          downPos = null
+          return
+        }
         if (!downPos) return
         const dist = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y)
         downPos = null
         if (dist > 5) return
         setNdcForCell(e, cell)
         raycaster.setFromCamera(ndc, camera)
-        const hits = raycaster.intersectObjects([...faceMeshes.values()], false)
         const s = useAppStore.getState()
-        if (hits.length > 0) {
-          const fid = hits[0].object.userData.faceId as number
-          const now = performance.now()
-          const near =
-            now - clickChain.t < 450 &&
-            Math.hypot(e.clientX - clickChain.x, e.clientY - clickChain.y) < 8
-          clickChain.count = near ? clickChain.count + 1 : 1
-          clickChain.t = now
-          clickChain.x = e.clientX
-          clickChain.y = e.clientY
-          if (clickChain.count >= 3) {
-            // Triple-click: the whole object (clicked face stays primary).
-            s.selectFaces([...s.doc.faces.map((f) => f.id).filter((id) => id !== fid), fid])
-          } else if (clickChain.count === 2) {
-            // Double-click: the face's row (Shift = its column), Maya-style.
-            const band = e.shiftKey ? columnFaceIds(s.doc, fid) : rowFaceIds(s.doc, fid)
-            s.selectFaces([...band.filter((id) => id !== fid), fid])
-          } else {
-            s.selectFace(fid, e.ctrlKey || e.metaKey)
+        const additive = e.ctrlKey || e.metaKey
+        const now = performance.now()
+        const near =
+          now - clickChain.t < 450 &&
+          Math.hypot(e.clientX - clickChain.x, e.clientY - clickChain.y) < 8
+        clickChain.count = near ? clickChain.count + 1 : 1
+        clickChain.t = now
+        clickChain.x = e.clientX
+        clickChain.y = e.clientY
+
+        if (s.selectMode === 'edge') {
+          const hits = raycaster.intersectObjects([...edgeProxies.values()], false)
+          if (hits.length > 0) {
+            const eid = hits[0].object.userData.edgeId as number
+            if (clickChain.count >= 2) {
+              // Double-click: the whole edge ring (Maya-style loop select).
+              s.selectEdges(edgeRing(s.doc, eid))
+            } else {
+              s.selectEdge(eid, additive)
+            }
+          } else if (!additive) {
+            clickChain.count = 0
+            s.selectEdge(null)
           }
-        } else if (!e.ctrlKey && !e.metaKey) {
-          clickChain.count = 0
-          s.selectFace(null)
+          return
+        }
+
+        const hits = raycaster.intersectObjects([...faceMeshes.values()], false)
+        if (hits.length === 0) {
+          if (!additive) {
+            clickChain.count = 0
+            s.selectFace(null)
+          }
+          return
+        }
+        const fid = hits[0].object.userData.faceId as number
+        if (s.selectMode === 'object') {
+          // Object mode: any click grabs the whole object (clicked face primary).
+          s.selectFaces([...s.doc.faces.map((f) => f.id).filter((id) => id !== fid), fid])
+          return
+        }
+        // Face mode: single = face, double = row, shift+double = column, triple = object.
+        if (clickChain.count >= 3) {
+          s.selectFaces([...s.doc.faces.map((f) => f.id).filter((id) => id !== fid), fid])
+        } else if (clickChain.count === 2) {
+          const band = e.shiftKey ? columnFaceIds(s.doc, fid) : rowFaceIds(s.doc, fid)
+          s.selectFaces([...band.filter((id) => id !== fid), fid])
+        } else {
+          s.selectFace(fid, additive)
         }
       }
 
@@ -579,6 +798,112 @@ export function ThreeView() {
     }
 
     const detachers = views.map(attachCellEvents)
+
+    // ---- W/E/R transform gizmo (move / rotate / scale the whole object) -----
+    // Bound to the perspective view; the helper renders in every view but is
+    // only interactive in the persp cell. Writes back into store.transform.
+    const perspView = views[0]
+    const transformControls = new TransformControls(perspView.camera, perspView.cell)
+    transformControls.setSpace('world')
+    let gizmoDragging = false
+    transformControls.addEventListener('dragging-changed', (e) => {
+      gizmoDragging = (e as unknown as { value: boolean }).value
+      for (const v of views) v.controls.enabled = !gizmoDragging
+    })
+    transformControls.addEventListener('objectChange', () => {
+      const st = useAppStore.getState()
+      if (st.transformTool === 'move') {
+        const p = placementGroup.position
+        st.setTransform({ translate: { x: p.x, y: p.y, z: p.z } })
+      } else if (st.transformTool === 'rotate') {
+        const r = orientGroup.rotation
+        st.setTransform({
+          rotateDeg: { x: radToDeg(r.x), y: radToDeg(r.y), z: radToDeg(r.z) },
+        })
+      } else if (st.transformTool === 'scale') {
+        const sc = orientGroup.scale
+        st.setTransform({ scale: Math.max(0.05, (sc.x + sc.y + sc.z) / 3) })
+      }
+    })
+    // r0.166 TransformControls is an Object3D; newer versions expose getHelper().
+    const tcAny = transformControls as unknown as { getHelper?: () => THREE.Object3D }
+    scene.add(tcAny.getHelper ? tcAny.getHelper() : (transformControls as unknown as THREE.Object3D))
+    transformControls.enabled = false
+    transformControls.visible = false
+    let lastTool: string | null = null
+
+    /** Attach/detach the gizmo to the right group when the tool changes. */
+    function syncTransformGizmo(s: ReturnType<typeof useAppStore.getState>) {
+      const hasModel = faceMeshes.size > 0
+      // The whole-object transform is pose-independent, so it works while a
+      // folded pose is shown too (just not during active playback). In edge
+      // mode the ring handle owns the Move tool, so keep this out of the way.
+      const playing = s.playback.mode === 'scrub' && s.playback.playing
+      const active =
+        s.editorMode === '3d' &&
+        !playing &&
+        s.transformTool !== 'select' &&
+        s.selectMode !== 'edge' &&
+        hasModel
+      const key = active ? s.transformTool : 'off'
+      if (key === lastTool) return
+      lastTool = key
+      if (!active) {
+        transformControls.detach()
+        transformControls.enabled = false
+        transformControls.visible = false
+        return
+      }
+      const mode = s.transformTool === 'move' ? 'translate' : s.transformTool
+      transformControls.setMode(mode as 'translate' | 'rotate' | 'scale')
+      transformControls.attach(s.transformTool === 'move' ? placementGroup : orientGroup)
+      transformControls.enabled = true
+      transformControls.visible = true
+    }
+
+    // ---- edge-ring move handle (Move tool + edge mode) ---------------------
+    // A visible double-arrow on the selected ring, along its reshape axis. Drag
+    // it (or the ring itself) to resize the model — e.g. a carton's height.
+    const edgeHandleMat = new THREE.MeshBasicMaterial({
+      color: 0xff9f1c,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.95,
+    })
+    const edgeHandle = new THREE.Group()
+    const handleShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2, 12), edgeHandleMat)
+    const handleUp = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.42, 16), edgeHandleMat)
+    handleUp.position.y = 1.15
+    const handleDn = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.42, 16), edgeHandleMat)
+    handleDn.position.y = -1.15
+    handleDn.rotation.z = Math.PI
+    const handleMeshes = [handleShaft, handleUp, handleDn]
+    edgeHandle.add(...handleMeshes)
+    edgeHandle.renderOrder = 999
+    edgeHandle.visible = false
+    scene.add(edgeHandle)
+
+    /** Place/orient/scale the edge-ring handle; hide it when not applicable. */
+    function updateEdgeHandle(s: ReturnType<typeof useAppStore.getState>) {
+      const playing = s.playback.mode === 'scrub' && s.playback.playing
+      const active =
+        s.editorMode === '3d' &&
+        !playing &&
+        s.selectMode === 'edge' &&
+        s.transformTool === 'move' &&
+        s.selectedEdges.length > 0
+      const rw = active ? edgeRingWorld(s) : null
+      if (!rw) {
+        edgeHandle.visible = false
+        return
+      }
+      edgeHandle.visible = true
+      edgeHandle.position.copy(rw.center)
+      edgeHandle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), rw.worldAxis)
+      const b = computeModelBounds()
+      const size = b ? b.min.distanceTo(b.max) : 6
+      edgeHandle.scale.setScalar(Math.max(0.5, size * 0.11))
+    }
 
     // ---- capture for instruction-sheet export ------------------------------
     function capture(poses: PoseAngles[], size = { w: 720, h: 540 }): string[] {
@@ -627,11 +952,15 @@ export function ThreeView() {
     if (import.meta.env.DEV) {
       ;(window as unknown as Record<string, unknown>).paperSimViewer = {
         gizmo,
+        transformControls,
         views,
+        placementGroup,
         pivotGroup,
         orientGroup,
         capture,
         faceMeshes: () => faceMeshes,
+        edgeProxies: () => edgeProxies,
+        edgeHandleVisible: () => edgeHandle.visible,
       }
     }
 
@@ -750,10 +1079,25 @@ export function ThreeView() {
         mat.emissiveIntensity = 0.35
       }
 
-      // Whole-object rotation + auto-centering pivot (frozen while dragging
-      // the fold gizmo so the model doesn't shift under the cursor).
-      const rot = s.objectRotation
-      orientGroup.rotation.set(degToRad(rot.x), degToRad(rot.y), degToRad(rot.z))
+      // Whole-object transform. While the transform gizmo owns a group we let
+      // it drive that group and read the value back (in objectChange); the
+      // other components still track the store.
+      syncTransformGizmo(s)
+      const tf = s.transform
+      if (!(gizmoDragging && s.transformTool === 'rotate')) {
+        orientGroup.rotation.set(
+          degToRad(tf.rotateDeg.x),
+          degToRad(tf.rotateDeg.y),
+          degToRad(tf.rotateDeg.z),
+        )
+      }
+      if (!(gizmoDragging && s.transformTool === 'scale')) orientGroup.scale.setScalar(tf.scale)
+      if (!(gizmoDragging && s.transformTool === 'move')) {
+        placementGroup.position.set(tf.translate.x, tf.translate.y, tf.translate.z)
+      }
+      // Auto-center pivot: frozen only while dragging the fold gizmo (so the
+      // model doesn't shift under the cursor). Runs during transform-gizmo
+      // drags so rotate/scale stay centered on the model.
       if (!drag) updatePivot(dt, firstFrame)
       firstFrame = false
 
@@ -769,7 +1113,18 @@ export function ThreeView() {
         }
       }
 
-      const axis = s.playback.mode === 'edit' ? selectedAxis() : null
+      // Highlight selected edges (edge mode): show their pick tubes.
+      const edgeSel = s.selectMode === 'edge' ? s.selectedEdges : []
+      for (const [edgeId, tube] of edgeProxies) {
+        ;(tube.material as THREE.MeshBasicMaterial).visible = edgeSel.includes(edgeId)
+      }
+      // Position the edge-ring move handle over the current selection.
+      updateEdgeHandle(s)
+
+      // Fold arc gizmo only in the default folding mode (face + Select tool);
+      // the W/E/R transform gizmo and edge mode replace it otherwise.
+      const foldMode = s.selectMode === 'face' && s.transformTool === 'select'
+      const axis = s.playback.mode === 'edit' && foldMode ? selectedAxis() : null
       if (axis) {
         gizmo.visible = true
         gizmo.position.copy(axis.mid)
@@ -814,6 +1169,8 @@ export function ThreeView() {
       ro.disconnect()
       window.removeEventListener('keydown', onKeyDown)
       detachers.forEach((d) => d())
+      transformControls.detach()
+      transformControls.dispose()
       views.forEach((v) => v.controls.dispose())
       registerCapture(null)
       disposeModel()

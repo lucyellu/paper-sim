@@ -43,7 +43,23 @@ export async function buildSheetCanvas(
   if (material.overlayImage) {
     try {
       const img = await loadImage(material.overlayImage)
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      const t = material.overlayTransform
+      const cw = canvas.width
+      const ch = canvas.height
+      if (!t) {
+        ctx.drawImage(img, 0, 0, cw, ch)
+      } else {
+        // Place the image into a scaled/offset rect and rotate about its center.
+        const iw = cw * t.scaleX
+        const ih = ch * t.scaleY
+        const ix = t.offsetX * cw
+        const iy = t.offsetY * ch
+        ctx.save()
+        ctx.translate(ix + iw / 2, iy + ih / 2)
+        ctx.rotate((t.rotationDeg * Math.PI) / 180)
+        ctx.drawImage(img, -iw / 2, -ih / 2, iw, ih)
+        ctx.restore()
+      }
     } catch {
       // Bad image data: skip the overlay.
     }

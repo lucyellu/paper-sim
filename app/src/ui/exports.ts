@@ -4,11 +4,12 @@
 
 import { sheetBounds, type PaperDoc } from '../model/document'
 import { toFoldFile } from '../model/foldfile'
+import type { MaterialSettings } from '../model/material'
 import { nextExportName, slugify } from '../model/naming'
 import type { Step } from '../model/ops'
 import { getDisplayAngles, type AppState } from '../state/store'
 import { captureAvailable, capturePoses } from '../viewer/capture'
-import { loadImage } from '../viewer/texture'
+import { buildSheetCanvas, loadImage } from '../viewer/texture'
 import { Pdf, type RGB } from './pdf'
 import { buildZip, dataUrlBytes, type ZipEntry } from './zip'
 
@@ -16,12 +17,18 @@ const PDF_INK: RGB = [0.23, 0.2, 0.15]
 const PDF_MUTED: RGB = [0.48, 0.42, 0.31]
 const PDF_LEGEND = 'solid = cut   ·   dashed blue = valley fold   ·   dashed red = mountain fold'
 
-/** Build a standalone SVG string of the dieline (cuts solid, creases dashed). */
-export function dielineSVG(doc: PaperDoc): string {
+/**
+ * Build a standalone SVG string of the dieline (cuts solid, creases dashed).
+ * Pass an `artwork` data URL (from dielineTextureCanvas) to composite the
+ * printed design under the line work instead of a blank cream background.
+ */
+export function dielineSVG(doc: PaperDoc, artwork?: string): string {
   const { min, max } = sheetBounds(doc)
   const pad = 1
   const w = max.x - min.x + 2 * pad
   const h = max.y - min.y + 2 * pad
+  const sw = max.x - min.x
+  const sh = max.y - min.y
   const pos = (id: number) => doc.vertices.find((v) => v.id === id)!.pos
   const lines = doc.edges
     .map((e) => {
@@ -35,10 +42,64 @@ export function dielineSVG(doc: PaperDoc): string {
       return `  <line x1="${a.x}" y1="${-a.y}" x2="${b.x}" y2="${-b.y}" stroke="${color}" stroke-width="${isCut ? 0.1 : 0.07}"${dash} stroke-linecap="round"/>`
     })
     .join('\n')
+  // Artwork spans the sheet bounds exactly (its top-left = min.x, max.y in doc).
+  const art = artwork
+    ? `\n<image href="${artwork}" x="${min.x}" y="${-max.y}" width="${sw}" height="${sh}" preserveAspectRatio="none"/>`
+    : ''
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${min.x - pad} ${-(max.y + pad)} ${w} ${h}" width="${w * 24}" height="${h * 24}">
-<rect x="${min.x - pad}" y="${-(max.y + pad)}" width="${w}" height="${h}" fill="#faf6ec"/>
+<rect x="${min.x - pad}" y="${-(max.y + pad)}" width="${w}" height="${h}" fill="#faf6ec"/>${art}
 ${lines}
 </svg>`
+}
+
+/**
+ * Render the flat dieline WITH its printed design: the material's sheet texture
+ * (base + overlay art) with the cut/crease line work drawn on top. Returns a
+ * canvas covering the sheet bounds (canvas px (0,0) = doc (min.x, max.y)).
+ */
+export async function dielineTextureCanvas(
+  doc: PaperDoc,
+  material: MaterialSettings,
+): Promise<HTMLCanvasElement> {
+  const canvas = await buildSheetCanvas(doc, material)
+  const { min, max } = sheetBounds(doc)
+  const w = Math.max(max.x - min.x, 0.001)
+  const scale = canvas.width / w
+  const ctx = canvas.getContext('2d')!
+  const pos = (id: number) => doc.vertices.find((v) => v.id === id)!.pos
+  ctx.lineCap = 'round'
+  for (const e of doc.edges) {
+    const a = pos(e.v1)
+    const b = pos(e.v2)
+    const isCut = e.kind === 'cut'
+    const target = doc.targetAngles?.[e.id]
+    ctx.strokeStyle = isCut ? '#2c2519' : (target ?? 0) < 0 ? '#dc2626' : '#2563eb'
+    ctx.lineWidth = Math.max(1, scale * (isCut ? 0.05 : 0.035))
+    ctx.setLineDash(isCut ? [] : [scale * 0.3, scale * 0.2])
+    ctx.beginPath()
+    ctx.moveTo((a.x - min.x) * scale, (max.y - a.y) * scale)
+    ctx.lineTo((b.x - min.x) * scale, (max.y - b.y) * scale)
+    ctx.stroke()
+  }
+  ctx.setLineDash([])
+  return canvas
+}
+
+/** The sheet artwork (base + overlay, no line work) as a PNG data URL. */
+export async function dielineArtworkDataUrl(
+  doc: PaperDoc,
+  material: MaterialSettings,
+): Promise<string> {
+  const canvas = await buildSheetCanvas(doc, material)
+  return canvas.toDataURL('image/png')
+}
+
+/** Composite the textured dieline to a PNG blob. */
+export async function dielineTexturePNG(doc: PaperDoc, material: MaterialSettings): Promise<Blob> {
+  const canvas = await dielineTextureCanvas(doc, material)
+  return new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png'),
+  )
 }
 
 export function downloadText(text: string, fileName: string, mime: string): void {
@@ -52,6 +113,17 @@ export function downloadBlob(blob: Blob, fileName: string): void {
   a.download = fileName
   a.click()
   URL.revokeObjectURL(url)
+}
+
+interface ImageBytes {
+  bytes: Uint8Array
+  w: number
+  h: number
+}
+
+/** JPEG-encode a canvas for embedding in a PDF. */
+function canvasToJpeg(canvas: HTMLCanvasElement): ImageBytes {
+  return { bytes: dataUrlBytes(canvas.toDataURL('image/jpeg', 0.92)), w: canvas.width, h: canvas.height }
 }
 
 /** Draw the dieline's line work into a rect of a PDF page (fit + centered). */
@@ -86,17 +158,36 @@ function drawDielineInto(pdf: Pdf, doc: PaperDoc, x: number, y: number, w: numbe
   }
 }
 
-/** The flat pattern as a printable one-page PDF (true vector line work). */
-export function dielinePDF(doc: PaperDoc, title: string): Blob {
+/**
+ * The flat pattern as a printable one-page PDF (true vector line work). Pass a
+ * material to composite the printed design under the lines (textured dieline).
+ */
+export async function dielinePDF(
+  doc: PaperDoc,
+  title: string,
+  material?: MaterialSettings,
+): Promise<Blob> {
   const { min, max } = sheetBounds(doc)
   const landscape = max.x - min.x > max.y - min.y
   const [pw, ph] = landscape ? [842, 595] : [595, 842]
   const pdf = new Pdf()
   pdf.addPage(pw, ph)
   const m = 48
-  pdf.text(m, ph - m, 16, `${title} — dieline`, { bold: true, color: PDF_INK })
+  const withArt = material ? ' (with artwork)' : ''
+  pdf.text(m, ph - m, 16, `${title} — dieline${withArt}`, { bold: true, color: PDF_INK })
   pdf.text(m, ph - m - 16, 9, PDF_LEGEND, { color: PDF_MUTED })
-  drawDielineInto(pdf, doc, m, m, pw - 2 * m, ph - 2 * m - 34)
+  if (material) {
+    // dielineTextureCanvas already bakes the line work onto the art: fit it.
+    const art = canvasToJpeg(await dielineTextureCanvas(doc, material))
+    const bw = pw - 2 * m
+    const bh = ph - 2 * m - 34
+    const scale = Math.min(bw / art.w, bh / art.h)
+    const iw = art.w * scale
+    const ih = art.h * scale
+    pdf.imageJpeg(art.bytes, art.w, art.h, m + (bw - iw) / 2, m + (bh - ih) / 2, iw, ih)
+  } else {
+    drawDielineInto(pdf, doc, m, m, pw - 2 * m, ph - 2 * m - 34)
+  }
   return pdf.save()
 }
 
@@ -245,7 +336,7 @@ export async function exportProjectBundle(s: AppState): Promise<string> {
     s.angles,
     s.steps,
     s.history,
-    s.objectRotation,
+    s.transform,
     s.projectName,
     s.material,
   )
@@ -254,7 +345,7 @@ export async function exportProjectBundle(s: AppState): Promise<string> {
     { name: `${slug}/${slug}_dieline.svg`, data: dielineSVG(s.doc) },
     {
       name: `${slug}/${slug}_dieline.pdf`,
-      data: new Uint8Array(await dielinePDF(s.doc, s.projectName).arrayBuffer()),
+      data: new Uint8Array(await (await dielinePDF(s.doc, s.projectName)).arrayBuffer()),
     },
   ]
   if (captureAvailable()) {

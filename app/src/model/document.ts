@@ -209,6 +209,90 @@ export function columnFaceIds(doc: PaperDoc, faceId: number): number[] {
   return bandFaceIds(doc, faceId, 'x')
 }
 
+function edgeDir(doc: PaperDoc, e: Edge): Vec2 {
+  const a = vertexById(doc, e.v1).pos
+  const b = vertexById(doc, e.v2).pos
+  const d = { x: b.x - a.x, y: b.y - a.y }
+  const l = Math.hypot(d.x, d.y) || 1
+  return { x: d.x / l, y: d.y / l }
+}
+
+function edgeMid(doc: PaperDoc, e: Edge): Vec2 {
+  const a = vertexById(doc, e.v1).pos
+  const b = vertexById(doc, e.v2).pos
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+}
+
+/**
+ * The edge "ring" containing `edgeId`: edges (near-)parallel to it that share
+ * its perpendicular flat-coordinate band. For a box/carton this is the loop of
+ * top (or bottom) wall edges — the set you'd drag to change height. Includes
+ * the seed edge. First-cut heuristic: tuned for axis-aligned box/carton rings.
+ */
+export function edgeRing(doc: PaperDoc, edgeId: number): number[] {
+  const seed = doc.edges.find((e) => e.id === edgeId)
+  if (!seed) return []
+  const dir = edgeDir(doc, seed)
+  const perp = { x: -dir.y, y: dir.x }
+  const seedLen = Math.hypot(
+    vertexById(doc, seed.v2).pos.x - vertexById(doc, seed.v1).pos.x,
+    vertexById(doc, seed.v2).pos.y - vertexById(doc, seed.v1).pos.y,
+  )
+  const mid = edgeMid(doc, seed)
+  const seedPerp = mid.x * perp.x + mid.y * perp.y
+  const band = Math.max(0.5, seedLen * 0.25)
+  const out: number[] = []
+  for (const e of doc.edges) {
+    const d = edgeDir(doc, e)
+    // Parallel (either orientation): small |cross|.
+    if (Math.abs(d.x * dir.y - d.y * dir.x) > 0.1) continue
+    const m = edgeMid(doc, e)
+    if (Math.abs(m.x * perp.x + m.y * perp.y - seedPerp) > band) continue
+    out.push(e.id)
+  }
+  return out
+}
+
+/** Unique vertex ids used by a set of edges. */
+export function edgesVertexIds(doc: PaperDoc, edgeIds: number[]): number[] {
+  const set = new Set<number>()
+  for (const id of edgeIds) {
+    const e = doc.edges.find((x) => x.id === id)
+    if (e) {
+      set.add(e.v1)
+      set.add(e.v2)
+    }
+  }
+  return [...set]
+}
+
+/**
+ * Unit flat-space axis perpendicular to a set of (roughly parallel) edges —
+ * the direction the ring moves to grow/shrink the model along it. Oriented to
+ * point away from the sheet centre (so "positive" is outward).
+ */
+export function edgesAxis(doc: PaperDoc, edgeIds: number[]): Vec2 {
+  const first = doc.edges.find((x) => x.id === edgeIds[0])
+  if (!first) return { x: 0, y: 1 }
+  const dir = edgeDir(doc, first)
+  let perp = { x: -dir.y, y: dir.x }
+  const c = sheetCentroid(doc)
+  const m = edgeMid(doc, first)
+  if ((m.x - c.x) * perp.x + (m.y - c.y) * perp.y < 0) perp = { x: -perp.x, y: -perp.y }
+  return perp
+}
+
+function sheetCentroid(doc: PaperDoc): Vec2 {
+  let x = 0
+  let y = 0
+  for (const v of doc.vertices) {
+    x += v.pos.x
+    y += v.pos.y
+  }
+  const n = doc.vertices.length || 1
+  return { x: x / n, y: y / n }
+}
+
 /** Bounding box of the flat sheet. */
 export function sheetBounds(doc: PaperDoc): { min: Vec2; max: Vec2 } {
   const min = { x: Infinity, y: Infinity }

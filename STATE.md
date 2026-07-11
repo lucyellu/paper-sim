@@ -3,16 +3,16 @@
 > Living document. Records the plan, decisions, and progress. Update whenever a decision is made,
 > a milestone lands, or scope changes. Newest progress-log entries go on top.
 
-**Status:** v0 + v0.5 + first v1 slice complete and verified — app in `app/`, run with `cd app && npm run dev`
+**Status:** v0 + v0.5 + v1 slices complete and verified — app in `app/`, run with `cd app && npm run dev`
 **Repo:** https://github.com/lucyellu/paper-sim (branch `main`)
-**Last updated:** 2026-07-10
+**Last updated:** 2026-07-11
 
 ## Picking up in a new session
 
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs`
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
 4. Next: remaining **v1** items (below) — SVG dieline import, per-hinge limits, materials,
@@ -161,12 +161,33 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
       Object controls moved to the right panel — 2026-07-10
 - [x] Maya-style selection: double-click = row, Shift+double-click = column, triple-click =
       whole object (3D view + 2D inset; `rowFaceIds`/`columnFaceIds`) — 2026-07-10
+- [x] Maya-style transform tools: Q/W/E/R move/rotate/scale gizmo (`TransformControls`) + numeric
+      Transform panel; whole-object `transform` persisted — 2026-07-10
+- [x] Select modes (1/2/3 = Object/Face/Edge); edge pick proxies + double-click edge-ring select
+      (`edgeRing`) — 2026-07-10
+- [x] Axis-constrained edge-ring reshape (drag/nudge a ring to change dimensions, e.g. carton
+      height; `moveVertices` + `setDocTransient`, one undoable `setDoc`) — 2026-07-10
+- [x] Top menu bar (File / Edit / Export) — 2026-07-10
+- [x] 3D mesh export: OBJ + GLB + FBX, folded and flat, textured (`model/meshExport`,
+      `objExport`, `fbxExport`, `ui/meshExport` GLB via GLTFExporter) — 2026-07-10
+- [x] UV/texture editor: `overlayTransform` (offset/scale/rotate) with a Texture tool + inspector in
+      the dieline editor; drives the 3D texture and all PNG exports — 2026-07-10
+- [x] Can / label template: faceted cylinder (`model/can.ts`, N vertical creases each folding 360/N;
+      one "Roll into a cylinder" step). The "curve capability" via many small rigid folds — 2026-07-11
+- [x] Rectangular gable carton: `buildGableCarton({width, depth, height, …})` — the ridge/gusset
+      geometry is rigid for any width (only depth couples to the gable height). Menu adds a
+      "Milk carton (tall/rect)" preset; the strawberry-milk dieline folds via it — 2026-07-11
+- [x] Textured dieline export: PNG / SVG / PDF that composite the material's artwork under the
+      cut/crease line work (`dielineTextureCanvas` / `dielineTexturePNG` / `dielineArtworkDataUrl`) —
+      2026-07-11
+- [x] Trace-backdrop tool: load a saved dieline image behind the dieline editor (drag / scale /
+      opacity), draw cuts+creases over it. Session-only (`store.backdrop`, not saved) — 2026-07-11
 - [ ] Per-hinge angle limits (basic constraints)
 - [ ] Animation export (GIF/MP4)
 - [ ] Starter model library from `reference/` (gift box, cup, boat, peacock…)
 - [ ] History panel: per-object filtered op list, per-object Delete History (compaction)
-- [ ] Micro-crease fan tool / soft folds (see "Soft folds" note below) — unlocks the can shape,
-      curved box, and the lucky star
+- [ ] Micro-crease fan tool / soft folds (see "Soft folds" note below) — the can shape now ships as a
+      faceted cylinder (`model/can.ts`); the fan tool remains for the curved box and the lucky star
 - [ ] SVG dieline import (PackCAD-style color mapping — see "Soft folds" note)
 - [ ] Cozy UI pass per `reference/GUI/`
 
@@ -215,6 +236,100 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 ## Progress log
 
 *(newest first)*
+
+- **2026-07-11** — **Image→dieline, can template, textured export round** (user asked: fold a real
+  dieline image — a strawberry-milk carton — plus a can, and export the artwork not just blank lines).
+  - **Can / label template** (`model/can.ts`): a strip of N tall panels joined by vertical creases;
+    each crease's target = 360/N so folding wraps the flat "label" into a regular N-gon prism
+    (24 facets reads as a smooth cylinder). Optional glue seam. This is the "curve capability" the
+    user wanted — the rigid hinge engine does it as many small folds, no new solver. New File-menu
+    item "New — Can label (tube)"; `templateSteps` adds a "Roll into a cylinder" step.
+  - **Parametric rectangular gable** (`buildGableCarton({width, depth, height, gable, rib, …})`):
+    generalised the square-only builder. Worked out (and verify-checked) that the ridge/gusset fold
+    is rigid for **any** width — every gusset/rib edge length is preserved; only the *depth* couples
+    to the gable height (needs gable > depth/2). Roof width = W, gusset folds over depth D, ridge runs
+    along W, gusset apex pulls inward by D/2 to `nx·(W−D)/2`, corners land on the ridge ends `nx·W/2`.
+    Square carton unchanged (regression-checked). New menu item "New — Milk carton (tall/rect)"
+    (W=5, D=3.2, H=13) — the strawberry-milk dieline folds via it and the artwork lands on the right
+    panels almost perfectly (proportions match). Store `newDocument(template, dims?)` threads dims;
+    `Template` gains `'can'`.
+  - **Textured dieline export** (`ui/exports.ts`): `dielineTextureCanvas` composites the material's
+    sheet texture (base + overlay art, source of truth = `buildSheetCanvas`) with the cut/crease line
+    work on top; `dielineTexturePNG` (PNG blob), `dielineArtworkDataUrl` (art-only for crisp SVG),
+    and `dielinePDF(doc, title, material?)` (now async; embeds the art). Export menu splits into
+    "Dieline … (line art)" and "Dieline … — with artwork" (PNG/SVG/PDF). `verify-v4` updated for the
+    now-async `dielinePDF`.
+  - **Trace-backdrop tool** (`ui/PatternEditor.tsx` + `store.backdrop`): a **Trace** tool loads any
+    saved dieline image behind the editor (drag to place, ± scale, opacity, Fit), so you can draw
+    cuts/creases over an imported dieline. Session-only — cleared on new/load, not written to `.fold`
+    (keeps files lean). This is the general "standardize my saved dieline examples" path for one-offs.
+  - **Verify:** new `scripts/verify-v6.mjs` (can fold-to-tube closure, rectangular-gable proportions
+    + square regression, textured PNG/SVG/PDF bytes, backdrop round-trip/clear, and the **real
+    strawberry-milk PNG** mapping end-to-end as an overlay). Whole suite (verify … v6) green, zero page
+    errors; visual smoke confirmed the can renders as a tube and the strawberry carton folds with its
+    label mapped onto the panels.
+  - **Follow-up fixes (same day, from user testing):** (1) the W/E/R gizmo/panel only ever acted on
+    the whole object — added a **visible orange edge-ring move handle** in the 3D view (edge mode +
+    Move tool + a selected ring) that drives the reshape; the whole-object `TransformControls` gizmo is
+    now **suppressed in edge mode** so the two don't compete. (2) The right panel renamed "Transform" →
+    **"Object transform"** and now shows the **"Edge ring"** section *first* (with "resizes the selected
+    ring, not the whole object") whenever an edge ring is selected. (3) File menu clarified: the
+    **tall/rect** milk carton (the shape printed cartons like the strawberry-milk dieline use) is listed
+    first with a tooltip pointing at the Texture tool; the square carton is labelled "(square base)".
+    verify-v6 gained edge-handle assertions (shown in edge mode, object gizmo hidden, hidden again in
+    object mode). (4) **Edge-ring reshape now works on the folded model** (scrubbed to a step), not
+    only the flat edit head — it's a pose-independent dieline edit, so the fold steps re-apply at the
+    new size and it no longer "snaps back to flat." The whole-object gizmo + edge handle now show
+    while a folded pose is displayed too (hidden only during active playback). Reshape onPointerDown
+    moved above the edit-mode guard; `EdgeRingSection` nudges enabled unless actively playing.
+  - **Scope notes:** the can is the tube/label only (no circular top/bottom disks — those need a
+    rigid-disk fold; deferred). Image→dieline is template-match + Texture-fit (works today for the
+    strawberry) or manual Trace; **automatic** line detection from a raster is still not attempted
+    (unreliable without color-coded strokes). Artwork registration onto arbitrary dielines is manual
+    via the Texture/UV tool. New mesh/dieline-with-art formats are in the Export menu but not added to
+    the project-bundle zip.
+
+- **2026-07-10 (night)** — **Maya-style tools round** (move/rotate/scale, top menu, mesh export,
+  select modes, UV editor). Full plan in `~/.claude/plans/recursive-conjuring-wall.md`.
+  - **Transform tools (Q/W/E/R):** unified whole-object `transform` in the store
+    (`{ translate, rotateDeg, scale }`, replaces `objectRotation`; back-compat load of the old
+    `paperSim:objectRotation`, saved as `paperSim:transform`). In-scene three.js `TransformControls`
+    bound to the perspective view, driving new scene groups: `placementGroup(translate) >
+    pivotGroup(auto-center) > orientGroup(rotate+scale) > modelGroup`. Numeric Move/Rotate/Scale
+    fields + ±90° buttons in the right panel's **Transform** section, two-way bound to the gizmo.
+  - **Select modes (1/2/3 = Object/Face/Edge):** `selectMode` in the store; ViewBar has tool +
+    mode buttons. Edge mode adds per-edge invisible cylinder pick proxies (`edgeProxies`) that
+    follow the fold; single-click selects an edge, **double-click selects the edge ring**
+    (`edgeRing()` in `document.ts` — parallel edges sharing a perpendicular band; box/carton-tuned).
+  - **Axis-constrained edge-ring reshape:** drag a selected ring with the Move tool (or use the
+    right-panel **Edge ring** nudge fields) to move its dieline vertices along the ring's flat axis
+    (`edgesAxis`/`edgesVertexIds` + `moveVertices` in `editing.ts`), refolding live via a new
+    `setDocTransient` store action and committing one undoable `setDoc` op. Camera is preserved
+    across the per-move rebuilds. This is how you change e.g. carton height.
+  - **Top menu bar** (`ui/TopBar.tsx`): File / Edit / Export dropdowns; File+Export sections removed
+    from the sidebar (slim **Project** section left behind). App shell is now a column
+    (`.topbar` + `.app-body`).
+  - **3D mesh export — OBJ + GLB + FBX, folded AND flat, textured:** `model/meshExport.ts` bakes each
+    panel to a y-up, centered, ground-rested n-gon (single-sided; object transform intentionally not
+    baked). `model/objExport.ts` (OBJ+MTL, zipped with the texture PNG), `ui/meshExport.ts` GLB via
+    three's `GLTFExporter` (single textured file; V flipped for glTF UV origin), `model/fbxExport.ts`
+    hand-written ASCII FBX 7400 (normals/UVs ByPolygonVertex, external texture ref, zipped when
+    textured). Wired into the Export menu; iterated names via `nextExportName`.
+  - **UV/texture editor:** `overlayTransform { offsetX, offsetY, scaleX, scaleY, rotationDeg }` on
+    the material (identity = old full-stretch), applied in `viewer/texture.ts` (source of truth for
+    the 3D texture + all PNG exports) and previewed in the dieline editor. New **Texture** tool in
+    the pattern editor: drag the design to move it, plus a numeric **Texture / UV** inspector
+    (offset/scale/rotate + upload + Fit-to-dieline).
+  - **Verify:** new `scripts/verify-v5.mjs` (transform round-trip, edge-ring select, reshape+undo,
+    OBJ/FBX bytes + bake, overlay-transform round-trip — all green); fixed `verify-v4.mjs`'s
+    section-collapse proxy after the sidebar reshuffle; interactive smoke test confirmed the menu,
+    a real GLB download, the W gizmo, and edge mode with zero page errors. Whole suite green.
+  - **Deviations / scope notes:** edge-ring reshape + `edgeRing` are tuned for axis-aligned
+    box/carton rings (skewed/curved rings, multi-axis free drags = future); the transform gizmo is
+    interactive only in the perspective cell (renders in all four); FBX is byte-structure-verified
+    but not yet imported into a real Blender/Maya; mesh formats are in the Export menu but NOT added
+    to the project-bundle zip (kept the zip lean; individual exports cover it). Drag-scale/rotate
+    handles for the overlay were left for later (numeric fields + drag-move cover fitting).
 
 - **2026-07-10 (evening)** — **Workspace, materials, PDFs, template steps round**: side panels
   now drag-resize and collapse to labeled strips, every section collapses (all persisted in

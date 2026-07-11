@@ -267,6 +267,21 @@ export function moveVertex(doc: PaperDoc, vertexId: number, pos: Vec2): EditResu
   return { doc: next }
 }
 
+/**
+ * Translate a set of vertices by a flat-space delta. Used by the edge-ring
+ * reshape (e.g. drag the carton-top ring down to shorten the walls): moving
+ * the shared ring vertices changes panel dimensions, then the model refolds.
+ */
+export function moveVertices(doc: PaperDoc, vertexIds: number[], delta: Vec2): EditResult {
+  if (vertexIds.length === 0 || (delta.x === 0 && delta.y === 0)) return { doc }
+  const set = new Set(vertexIds)
+  const next = cloneDoc(doc)
+  for (const v of next.vertices) {
+    if (set.has(v.id)) v.pos = { x: v.pos.x + delta.x, y: v.pos.y + delta.y }
+  }
+  return { doc: next }
+}
+
 /** Set/clear the authored target angle of a crease. */
 export function setTargetAngle(
   doc: PaperDoc,

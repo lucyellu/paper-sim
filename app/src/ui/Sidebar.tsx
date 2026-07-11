@@ -1,43 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { nextExportName } from '../model/naming'
-import { selectedHinge, selectedHinges, useAppStore, type AppState } from '../state/store'
-import {
-  dielinePDF,
-  dielineSVG,
-  downloadBlob,
-  downloadText,
-  exportProjectBundle,
-  instructionsPDF,
-  openInstructionSheet,
-} from './exports'
+import { selectedHinge, selectedHinges, useAppStore } from '../state/store'
 import { Section, SidePanel } from './panels'
 
 export function Sidebar() {
   const s = useAppStore()
   const editMode = s.playback.mode === 'edit'
-  const fileInput = useRef<HTMLInputElement>(null)
 
   const hinge = selectedHinge(s)
   const hinges = selectedHinges(s)
   const selectedFaces = s.selection
     .map((id) => s.doc.faces.find((f) => f.id === id))
     .filter((f): f is NonNullable<typeof f> => f !== undefined)
-
-  async function onLoadFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    try {
-      const json = JSON.parse(await file.text())
-      s.loadFile(json, file.name)
-    } catch (err) {
-      alert(`Could not load file: ${err instanceof Error ? err.message : err}`)
-    }
-  }
-
-  function newDoc(template: 'tuck' | 'gable', label: string) {
-    if (confirm(`Start a new ${label}? Unsaved work will be lost.`)) s.newDocument(template)
-  }
 
   return (
     <SidePanel id="left" side="left" title="Paper Sim" defaultWidth={270}>
@@ -46,26 +19,9 @@ export function Sidebar() {
         <span className="brand-sub">v1 — fold anything flat</span>
       </div>
 
-      <Section id="file" title="File">
-        <div className="btn-row">
-          <button onClick={() => newDoc('tuck', 'tuck box')}>New: Box</button>
-          <button onClick={() => newDoc('gable', 'milk carton')}>New: Milk carton</button>
-        </div>
-        <div className="btn-row">
-          <button onClick={() => s.saveFile()}>Save</button>
-          <button onClick={() => fileInput.current?.click()} title="Open a PaperSim or any FOLD file">
-            Load
-          </button>
-          <input
-            ref={fileInput}
-            type="file"
-            accept=".fold,application/json"
-            style={{ display: 'none' }}
-            onChange={onLoadFile}
-          />
-        </div>
+      <Section id="project" title="Project">
         <label className="project-name-row">
-          <span>Project</span>
+          <span>Name</span>
           <input
             type="text"
             className="project-name"
@@ -78,6 +34,7 @@ export function Sidebar() {
             }}
           />
         </label>
+        <p className="hint">File &amp; Export live in the top menu bar.</p>
       </Section>
 
       <Section id="selection" title="Selection">
@@ -110,7 +67,6 @@ export function Sidebar() {
         )}
       </Section>
 
-      <ExportSection />
       <StepsSection />
     </SidePanel>
   )
@@ -313,84 +269,6 @@ function GroupAngleControl({ hinges, disabled }: { hinges: number[]; disabled: b
   )
 }
 
-function ExportSection() {
-  const s = useAppStore()
-  return (
-    <Section id="export" title="Export">
-      <div className="btn-row">
-        <button
-          title="Download the flat dieline as an SVG (cuts solid, folds dashed)"
-          onClick={() =>
-            downloadText(
-              dielineSVG(s.doc),
-              nextExportName(s.projectName, 'dieline', 'svg'),
-              'image/svg+xml',
-            )
-          }
-        >
-          Dieline SVG
-        </button>
-        <button
-          title="Download the flat dieline as a printable vector PDF"
-          onClick={() =>
-            downloadBlob(
-              dielinePDF(s.doc, s.projectName),
-              nextExportName(s.projectName, 'dieline', 'pdf'),
-            )
-          }
-        >
-          Dieline PDF
-        </button>
-      </div>
-      <div className="btn-row">
-        <button
-          title="Open a printable page: dieline + numbered snapshots of each fold step"
-          onClick={() => {
-            const state = useAppStore.getState() as AppState
-            if (!openInstructionSheet(state.doc, state.steps, state.projectName)) {
-              alert('Record at least one keyframe first — the sheet shows one image per step.')
-            }
-          }}
-        >
-          Instructions
-        </button>
-        <button
-          title="Download the instruction sheet as a printable PDF"
-          onClick={() => {
-            const state = useAppStore.getState() as AppState
-            instructionsPDF(state.doc, state.steps, state.projectName)
-              .then((pdf) => {
-                if (!pdf) {
-                  alert('Record at least one keyframe first — the sheet shows one image per step.')
-                  return
-                }
-                downloadBlob(pdf, nextExportName(state.projectName, 'instructions', 'pdf'))
-              })
-              .catch((e) => alert(`PDF export failed: ${e}`))
-          }}
-        >
-          Instructions PDF
-        </button>
-      </div>
-      <div className="btn-row">
-        <button
-          title="Download everything as a zip: .fold project, dieline SVG + PDF, 3D snapshot, instructions HTML + PDF"
-          onClick={() => {
-            exportProjectBundle(useAppStore.getState() as AppState).catch((e) =>
-              alert(`Export failed: ${e}`),
-            )
-          }}
-        >
-          Export project (zip)
-        </button>
-      </div>
-      <p className="hint">
-        Files are numbered per project (e.g. <i>carton_dieline_001.svg</i>) so repeat exports never
-        overwrite. The zip unpacks into a project-name folder.
-      </p>
-    </Section>
-  )
-}
 
 function StepsSection() {
   const s = useAppStore()

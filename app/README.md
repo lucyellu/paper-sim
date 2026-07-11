@@ -14,10 +14,14 @@ starts the dev server if it isn't running and opens the app in the browser.
 
 ## Use
 
-- **New: Box / New: Milk carton** — starter dielines. The milk carton is a gable-top with the
-  spout gusset creases (diagonals on the side tops); every crease carries the target angle that
-  seals the carton. Both templates come with their fold steps already recorded — press **play**
-  on the timeline to watch them fold, or export instructions immediately.
+- **File → New** — starter dielines: tuck box, milk carton (square or **tall/rect** gable), and a
+  **can label** (faceted cylinder — the label rectangle wraps into a tube via a fan of creases).
+  The milk carton is a gable-top with spout gusset creases; every crease carries the target angle
+  that seals it. Templates come with their fold steps recorded — press **play** to watch them fold.
+- **Transform tools** — `Q`/`W`/`E`/`R` = select / move / rotate / scale (in-scene gizmo + numeric
+  fields, right panel). `1`/`2`/`3` = Object / Face / **Edge** select mode. In Edge mode,
+  double-click an edge to select its whole ring, then drag the **orange arrow** (or use the Edge
+  ring nudge fields) to resize the model — works on the folded model too (it's a dieline edit).
 - **Click a panel** (3D view or 2D pattern inset) to select it; drag the **orange ring** to fold
   along its hinge. The ring soft-snaps near preset/target angles (Alt = free, Shift = 15° grid);
   the sidebar has slider/number input plus preset buttons tinted by how close they are to the
@@ -39,15 +43,17 @@ starts the dev server if it isn't running and opens the app in the browser.
 - **✎ (top right)** opens the **dieline editor**: draw creases/cuts (endpoints snap to points and
   lines; drawing across a panel splits it), delete lines between panels (merges them), click a
   line to retype it (cut ↔ crease) or set its target angle, drag points to move them. All edits
-  are undoable history ops.
+  are undoable history ops. Two extra tools: **Texture** (fit a printed design onto the panels —
+  drag/offset/scale/rotate the overlay) and **Trace** (drop a reference dieline image behind the
+  editor and draw the cut/crease lines over it; the backdrop is a guide, not saved).
 - **Project name** (File section) names your work; fold steps can be renamed in the steps list.
   Exports are numbered per project — `carton_dieline_001.svg`, `_002`, … — so nothing overwrites.
-- **Export** — *Dieline SVG* / *Dieline PDF* download the flat pattern (cuts solid,
-  valley/mountain dashed; the PDF is true vector); *Instructions* opens a printable page with
-  the dieline plus one numbered 3D snapshot per fold step, and *Instructions PDF* downloads the
-  same as a ready-made PDF; *Export project (zip)* downloads everything — a `projectname/`
-  folder with the `.fold` file (model + history), dieline SVG + PDF, a snapshot of the current
-  pose, and the instructions HTML + PDF.
+- **Export** (top menu) — *Dieline SVG / PDF* line art (cuts solid, valley/mountain dashed; PDF is
+  true vector), and *Dieline PNG / SVG / PDF — with artwork* (the printed design composited under
+  the lines); *Instructions* (printable page + PDF) with the dieline plus one numbered 3D snapshot
+  per fold step; **3D mesh — OBJ / GLB / FBX** in folded and flat poses, textured, for
+  Maya/Blender/Roblox; *Project bundle (zip)* — a `projectname/` folder with the `.fold` (model +
+  history), dieline SVG + PDF, a pose snapshot, and the instructions HTML + PDF.
 - **F** frames the selected panel in all views; with nothing selected it frames the whole model.
 - **Add Keyframe** records the current pose as the next fold step. The timeline shows a numbered
   notch per step — click one to select it, then ✎ re-edit (re-record) or ⏵ continue after it.
@@ -75,6 +81,8 @@ node scripts/repro-crash.mjs   # step re-edit / history-surgery stress (duplicat
 node scripts/check-sheet.mjs   # instruction-sheet popup + group-fold UI
 node scripts/check-exports.mjs # numbered export names, PDFs, project bundle zip, name round-trip
 node scripts/verify-v4.mjs     # template steps, row/column/object selection, materials, panels
+node scripts/verify-v5.mjs     # transform round-trip, edge-ring select + reshape, OBJ/FBX bytes
+node scripts/verify-v6.mjs     # can + rectangular-gable geometry, textured export, edge handle
 node scripts/shoot-v3.mjs      # visual pass: carton fold sequence + editor screenshots
 ```
 

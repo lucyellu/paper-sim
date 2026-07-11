@@ -5,6 +5,7 @@ import { PatternEditor } from './ui/PatternEditor'
 import { PatternInset } from './ui/PatternInset'
 import { Sidebar } from './ui/Sidebar'
 import { Timeline } from './ui/Timeline'
+import { TopBar } from './ui/TopBar'
 import { ViewBar } from './ui/ViewBar'
 import { ThreeView } from './viewer/ThreeView'
 
@@ -23,6 +24,31 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault()
         s.redo()
+      } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        // Maya-style tool + select-mode hotkeys.
+        switch (e.key.toLowerCase()) {
+          case 'q':
+            s.setTransformTool('select')
+            break
+          case 'w':
+            s.setTransformTool('move')
+            break
+          case 'e':
+            s.setTransformTool('rotate')
+            break
+          case 'r':
+            s.setTransformTool('scale')
+            break
+          case '1':
+            s.setSelectMode('object')
+            break
+          case '2':
+            s.setSelectMode('face')
+            break
+          case '3':
+            s.setSelectMode('edge')
+            break
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -31,15 +57,18 @@ export default function App() {
 
   return (
     <div className={`app ${theme}`}>
-      <Sidebar />
-      <div className="main">
-        <ThreeView />
-        {editorMode === 'pattern' && <PatternEditor />}
-        <ViewBar />
-        {editorMode === '3d' && <PatternInset />}
-        <Timeline />
+      <TopBar />
+      <div className="app-body">
+        <Sidebar />
+        <div className="main">
+          <ThreeView />
+          {editorMode === 'pattern' && <PatternEditor />}
+          <ViewBar />
+          {editorMode === '3d' && <PatternInset />}
+          <Timeline />
+        </div>
+        <DetailsPanel />
       </div>
-      <DetailsPanel />
     </div>
   )
 }

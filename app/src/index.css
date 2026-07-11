@@ -59,9 +59,100 @@ body {
 
 .app {
   display: flex;
+  flex-direction: column;
   height: 100%;
   color: var(--text);
   background: var(--bg);
+}
+
+.app-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* ---- top menu bar ---- */
+
+.topbar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 34px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--panel-border);
+  position: relative;
+  z-index: 20;
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  color: var(--text);
+  padding: 0 12px 0 4px;
+  letter-spacing: 0.2px;
+}
+
+.menu {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.menu-label {
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  padding: 0 12px;
+  color: var(--text);
+}
+
+.menu-label:hover:not(:disabled),
+.menu.open .menu-label {
+  background: var(--btn-hover);
+}
+
+.menu-drop {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
+  min-width: 210px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  z-index: 30;
+}
+
+.menu-item {
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--btn-hover);
+}
+
+.menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--panel-border);
+}
+
+.vb-mode {
+  min-width: 34px;
+  font-size: 11px;
+  padding: 5px 7px;
 }
 
 /* ---- side panels: resizable + collapsible ---- */
@@ -868,4 +959,85 @@ button.step-num {
   border-radius: 8px;
   font-size: 12.5px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+/* ---- transform (move / rotate / scale) numeric fields ---- */
+
+.xform-grid {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr 1fr;
+  gap: 4px 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.xform-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.xform-label {
+  font-size: 11px;
+  color: var(--hint);
+}
+
+.xform-num {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 5px;
+  border: 1px solid var(--input-border);
+  border-radius: 5px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  text-align: right;
+}
+
+.xform-scale {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.xform-scale > span {
+  font-size: 11px;
+  color: var(--hint);
+  min-width: 40px;
+}
+
+.xform-scale .xform-num {
+  max-width: 90px;
+}
+
+/* ---- texture / UV inspector (pattern editor) ---- */
+
+.tex-inspector .tex-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px 8px;
+  margin: 6px 0;
+}
+
+.tex-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--hint);
+}
+
+.tex-field input {
+  width: 64px;
+  padding: 3px 5px;
+  border: 1px solid var(--input-border);
+  border-radius: 5px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  text-align: right;
 }

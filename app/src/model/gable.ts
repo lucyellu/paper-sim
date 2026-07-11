@@ -17,19 +17,70 @@
 import { buildPanelTree, type Edge, type EdgeKind, type Face, type PaperDoc, type Vec2, type Vertex } from './document'
 import { deriveTargetAngles, type TargetPositions } from './targets'
 
-const S = 4 // square base side (width = depth; a gable only closes on a square)
-const H = 10 // body height
-const G = 3 // gable (roof/gusset) height; must be > S/2
-const R = 0.9 // seal rib height
-const BOT_FB = 2.2 // bottom flap height, front/back
-const BOT_LR = 1.8 // bottom flap height, sides
-const GLUE = 1.2 // glue flap width
+/**
+ * Gable-carton dimensions. width = front/back panel width, depth = side panel
+ * width; a rectangular gable is rigid because the roof ridge runs along the
+ * width and the gussets fold in over the depth (edge lengths are preserved for
+ * any width — only the depth couples to the gable height, which must exceed
+ * depth/2 for the roof to reach the ridge).
+ */
+export interface GableDims {
+  width: number
+  depth: number
+  height: number
+  /** Roof/gusset flat height; must be > depth/2. Default = 0.75·depth. */
+  gable?: number
+  /** Seal-rib height. */
+  rib?: number
+  /** Bottom flap height, front/back. */
+  botFB?: number
+  /** Bottom flap height, sides. */
+  botLR?: number
+  /** Glue flap width. */
+  glue?: number
+}
 
-const SIN = S / (2 * G) // roof tilt: top edges travel S/2 inward to meet
-const COS = Math.sqrt(1 - SIN * SIN)
-const PEAK = G * COS // peak height above the body top
+export function defaultGableDims(): GableDims {
+  return { width: 4, depth: 4, height: 10 }
+}
 
 type P3 = [number, number, number]
+
+interface Dims {
+  W: number
+  D: number
+  H: number
+  G: number
+  R: number
+  BOT_FB: number
+  BOT_LR: number
+  GLUE: number
+  SIN: number
+  COS: number
+  PEAK: number
+}
+
+function resolveDims(d: GableDims): Dims {
+  const W = d.width
+  const D = d.depth
+  const H = d.height
+  const G = d.gable ?? D * 0.75
+  const SIN = D / (2 * G) // roof tilt: top edges travel D/2 inward to the ridge
+  const COS = Math.sqrt(Math.max(0, 1 - SIN * SIN))
+  return {
+    W,
+    D,
+    H,
+    G,
+    R: d.rib ?? 0.9,
+    BOT_FB: d.botFB ?? 2.2,
+    BOT_LR: d.botLR ?? 1.8,
+    GLUE: d.glue ?? 1.2,
+    SIN,
+    COS,
+    PEAK: G * COS,
+  }
+}
 
 interface Builder {
   vertices: Vertex[]
@@ -87,16 +138,18 @@ function addPoly(
 /**
  * Sealed-pose position of a point on the body walls / glue flap. `u` is the
  * flat x (perimeter coordinate), `y` the world height. The flat strip wraps
- * around the square footprint front -> right -> back -> left -> (glue on
- * the front plane).
+ * around the rectangular footprint front -> right -> back -> left -> (glue on
+ * the front plane). Widths: front/back = W, sides = D.
  */
-function wall(u: number, y: number): P3 {
-  const s2 = S / 2
-  if (u <= S) return [u - s2, y, s2]
-  if (u <= 2 * S) return [s2, y, s2 - (u - S)]
-  if (u <= 3 * S) return [s2 - (u - 2 * S), y, -s2]
-  if (u <= 4 * S) return [-s2, y, -s2 + (u - 3 * S)]
-  return [-s2 + (u - 4 * S), y, s2]
+function wallPos(dm: Dims, u: number, y: number): P3 {
+  const { W, D } = dm
+  const hw = W / 2
+  const hd = D / 2
+  if (u <= W) return [u - hw, y, hd] // front: x -hw..hw, z=+hd
+  if (u <= W + D) return [hw, y, hd - (u - W)] // right: x=hw, z hd..-hd
+  if (u <= 2 * W + D) return [hw - (u - (W + D)), y, -hd] // back: x hw..-hw, z=-hd
+  if (u <= 2 * W + 2 * D) return [-hw, y, -hd + (u - (2 * W + D))] // left: x=-hw, z -hd..hd
+  return [-hw + (u - (2 * W + 2 * D)), y, hd] // glue onto front plane
 }
 
 /** Outward wall normal for body column i (0=front, 1=right, 2=back, 3=left). */
@@ -107,7 +160,11 @@ const WALL_NORMAL: P3[] = [
   [-1, 0, 0],
 ]
 
-export function buildGableCarton(): PaperDoc {
+export function buildGableCarton(dims: GableDims = defaultGableDims()): PaperDoc {
+  const dm = resolveDims(dims)
+  const { W, D, H, G, R, BOT_FB, BOT_LR, GLUE, SIN, COS, PEAK } = dm
+  const wall = (u: number, y: number): P3 => wallPos(dm, u, y)
+
   const b: Builder = {
     vertices: [],
     edges: [],
@@ -118,10 +175,14 @@ export function buildGableCarton(): PaperDoc {
     target3: new Map(),
   }
   const names = ['front', 'right side', 'back', 'left side']
+  // Column flat x-starts and widths: front(W) right(D) back(W) left(D).
+  const colX = [0, W, W + D, 2 * W + D]
+  const colW = [W, D, W, D]
   let rootFaceId = -1
 
   for (let i = 0; i < 4; i++) {
-    const x0 = i * S
+    const x0 = colX[i]
+    const cw = colW[i]
     const bot = i % 2 === 0 ? BOT_FB : BOT_LR
     const [nx, , nz] = WALL_NORMAL[i]
 
@@ -131,8 +192,8 @@ export function buildGableCarton(): PaperDoc {
       names[i],
       [
         { p: { x: x0, y: 0 }, t: wall(x0, 0) },
-        { p: { x: x0 + S, y: 0 }, t: wall(x0 + S, 0) },
-        { p: { x: x0 + S, y: H }, t: wall(x0 + S, H) },
+        { p: { x: x0 + cw, y: 0 }, t: wall(x0 + cw, 0) },
+        { p: { x: x0 + cw, y: H }, t: wall(x0 + cw, H) },
         { p: { x: x0, y: H }, t: wall(x0, H) },
       ],
       ['crease', 'crease', 'crease', i > 0 ? 'crease' : 'cut'],
@@ -150,16 +211,16 @@ export function buildGableCarton(): PaperDoc {
       `${names[i]} bottom flap`,
       [
         { p: { x: x0, y: -bot }, t: flapT(x0, -bot) },
-        { p: { x: x0 + S, y: -bot }, t: flapT(x0 + S, -bot) },
-        { p: { x: x0 + S, y: 0 }, t: wall(x0 + S, 0) },
+        { p: { x: x0 + cw, y: -bot }, t: flapT(x0 + cw, -bot) },
+        { p: { x: x0 + cw, y: 0 }, t: wall(x0 + cw, 0) },
         { p: { x: x0, y: 0 }, t: wall(x0, 0) },
       ],
       ['cut', 'cut', 'crease', 'cut'],
     )
 
     if (i % 2 === 0) {
-      // Front/back: roof panel + seal rib. The roof tilts inward so its top
-      // edge lands on the peak line (z = 0), the rib stands vertical there.
+      // Front/back roof (width W): tilts inward so its top edge lands on the
+      // ridge (z = 0), the rib stands vertical there.
       const roofT = (u: number, w: number): P3 => {
         const base = wall(u, 0)
         return [base[0], H + w * COS, base[2] - nz * w * SIN]
@@ -170,8 +231,8 @@ export function buildGableCarton(): PaperDoc {
         `${names[i]} roof`,
         [
           { p: { x: x0, y: H }, t: wall(x0, H) },
-          { p: { x: x0 + S, y: H }, t: wall(x0 + S, H) },
-          { p: { x: x0 + S, y: H + G }, t: roofT(x0 + S, G) },
+          { p: { x: x0 + cw, y: H }, t: wall(x0 + cw, H) },
+          { p: { x: x0 + cw, y: H + G }, t: roofT(x0 + cw, G) },
           { p: { x: x0, y: H + G }, t: roofT(x0, G) },
         ],
         ['crease', 'cut', 'crease', 'cut'],
@@ -181,32 +242,31 @@ export function buildGableCarton(): PaperDoc {
         `${names[i]} rib`,
         [
           { p: { x: x0, y: H + G }, t: ribT(x0, 0) },
-          { p: { x: x0 + S, y: H + G }, t: ribT(x0 + S, 0) },
-          { p: { x: x0 + S, y: H + G + R }, t: ribT(x0 + S, R) },
+          { p: { x: x0 + cw, y: H + G }, t: ribT(x0 + cw, 0) },
+          { p: { x: x0 + cw, y: H + G + R }, t: ribT(x0 + cw, R) },
           { p: { x: x0, y: H + G + R }, t: ribT(x0, R) },
         ],
         ['crease', 'cut', 'cut', 'cut'],
       )
     } else {
-      // Sides: gusset (three triangles) + rib halves that pinch shut.
+      // Sides (depth D): gusset (three triangles) + rib halves that pinch shut.
+      // The gusset folds in over the depth; corners land on the ridge END at
+      // x = nx·W/2, the apex pulls inward by D/2 to x = nx·(W−D)/2.
       const side = names[i]
-      const apexT: P3 = [0, H + PEAK, 0]
-      // Both gusset top corners fold to the same sealed point on the peak
-      // line, at the wall's x (right side x = +S/2, left side x = -S/2).
-      const cornerT: P3 = [nx * (S / 2), H + PEAK, 0]
-      // Rib halves double over onto the segment between the corner point and
-      // the apex; xAt maps the flat position within the gusset onto it.
+      const apexT: P3 = [(nx * (W - D)) / 2, H + PEAK, 0]
+      const cornerT: P3 = [(nx * W) / 2, H + PEAK, 0]
+      // Rib halves double over onto the corner→apex→corner path (x only).
       const xAt = (u: number): number => {
-        const a = u - x0 // 0..S across the gusset
-        return nx * (S / 2) * (a <= S / 2 ? 1 - a / (S / 2) : a / (S / 2) - 1)
+        const a = u - x0 // 0..D across the gusset
+        return a <= D / 2 ? nx * (W / 2 - a) : nx * (W / 2 - D + a)
       }
       const ribT = (u: number, r: number): P3 => [xAt(u), H + PEAK + r, 0]
 
       const bl = { p: { x: x0, y: H }, t: wall(x0, H) }
-      const br = { p: { x: x0 + S, y: H }, t: wall(x0 + S, H) }
-      const apex = { p: { x: x0 + S / 2, y: H + G }, t: apexT }
+      const br = { p: { x: x0 + cw, y: H }, t: wall(x0 + cw, H) }
+      const apex = { p: { x: x0 + cw / 2, y: H + G }, t: apexT }
       const tl = { p: { x: x0, y: H + G }, t: cornerT }
-      const tr = { p: { x: x0 + S, y: H + G }, t: cornerT }
+      const tr = { p: { x: x0 + cw, y: H + G }, t: cornerT }
 
       addPoly(b, `${side} gusset`, [bl, br, apex], ['crease', 'crease', 'crease'])
       addPoly(b, `${side} gusset left`, [bl, apex, tl], ['crease', 'crease', 'cut'])
@@ -222,7 +282,7 @@ export function buildGableCarton(): PaperDoc {
         [
           { ...tl, t: cornerT },
           { ...apex, t: apexT },
-          ribPt(x0 + S / 2, R),
+          ribPt(x0 + cw / 2, R),
           ribPt(x0, R),
         ],
         ['crease', 'crease', 'cut', 'cut'],
@@ -233,8 +293,8 @@ export function buildGableCarton(): PaperDoc {
         [
           { ...apex, t: apexT },
           { ...tr, t: cornerT },
-          ribPt(x0 + S, R),
-          ribPt(x0 + S / 2, R),
+          ribPt(x0 + cw, R),
+          ribPt(x0 + cw / 2, R),
         ],
         ['crease', 'cut', 'cut', 'crease'],
       )
@@ -242,7 +302,7 @@ export function buildGableCarton(): PaperDoc {
   }
 
   // Glue flap off the left side's right edge, wrapping onto the front plane.
-  const gx = 4 * S
+  const gx = 2 * W + 2 * D
   addPoly(
     b,
     'glue flap',

@@ -1,4 +1,6 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { edgesAxis, edgesVertexIds } from '../model/document'
+import { moveVertices } from '../model/editing'
 import type { MaterialSettings } from '../model/material'
 import { isDeformerOp } from '../model/ops'
 import { describeOp, primaryFaceId, selectedHinge, useAppStore } from '../state/store'
@@ -18,7 +20,18 @@ export function DetailsPanel() {
         <SelectionDetails />
       </Section>
 
-      <ObjectSection />
+      {/* In edge mode the ring reshape is the relevant control — show it first. */}
+      {s.selectMode === 'edge' && s.selectedEdges.length > 0 ? (
+        <>
+          <EdgeRingSection />
+          <TransformSection />
+        </>
+      ) : (
+        <>
+          <TransformSection />
+          <EdgeRingSection />
+        </>
+      )}
       <MaterialSection />
 
       <Section id="history" title={`History (${s.history.log.length})`} className="history">
@@ -107,36 +120,205 @@ export function DetailsPanel() {
   )
 }
 
-function ObjectSection() {
-  const s = useAppStore()
-  const rot = s.objectRotation
-  const axes: Array<keyof typeof rot> = ['x', 'y', 'z']
+/**
+ * A compact numeric input with a local text buffer so live gizmo updates show
+ * through while typing is still possible (commits on Enter / blur).
+ */
+function NumberCell({
+  value,
+  step = 1,
+  min,
+  max,
+  onCommit,
+}: {
+  value: number
+  step?: number
+  min?: number
+  max?: number
+  onCommit: (n: number) => void
+}) {
+  const [text, setText] = useState<string | null>(null)
+  useEffect(() => setText(null), [value])
   return (
-    <Section id="object" title="Object">
+    <input
+      type="number"
+      className="xform-num"
+      step={step}
+      min={min}
+      max={max}
+      value={text ?? value}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        if (text !== null && text !== '' && Number.isFinite(Number(text))) onCommit(Number(text))
+        setText(null)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+      }}
+    />
+  )
+}
+
+function TransformSection() {
+  const s = useAppStore()
+  const t = s.transform
+  const axes: Array<keyof typeof t.translate> = ['x', 'y', 'z']
+  const identity =
+    t.translate.x === 0 &&
+    t.translate.y === 0 &&
+    t.translate.z === 0 &&
+    t.rotateDeg.x === 0 &&
+    t.rotateDeg.y === 0 &&
+    t.rotateDeg.z === 0 &&
+    t.scale === 1
+
+  return (
+    <Section id="object" title="Object transform">
+      <div className="xform-grid">
+        <span className="xform-head" />
+        <span className="xform-head">X</span>
+        <span className="xform-head">Y</span>
+        <span className="xform-head">Z</span>
+
+        <span className="xform-label">Move</span>
+        {axes.map((axis) => (
+          <NumberCell
+            key={`t-${axis}`}
+            value={round(t.translate[axis])}
+            step={0.5}
+            onCommit={(n) => s.setTransform({ translate: { ...t.translate, [axis]: n } })}
+          />
+        ))}
+
+        <span className="xform-label">Rotate</span>
+        {axes.map((axis) => (
+          <NumberCell
+            key={`r-${axis}`}
+            value={round(t.rotateDeg[axis])}
+            step={15}
+            onCommit={(n) => s.setTransform({ rotateDeg: { ...t.rotateDeg, [axis]: n } })}
+          />
+        ))}
+      </div>
+
+      <label className="xform-scale">
+        <span>Scale</span>
+        <NumberCell
+          value={round(t.scale)}
+          step={0.1}
+          min={0.05}
+          onCommit={(n) => s.setTransform({ scale: n > 0 ? n : 0.05 })}
+        />
+      </label>
+
       <div className="object-rows">
         {axes.map((axis) => (
           <div className="btn-row object-row" key={axis}>
             <span className="axis-label">{axis.toUpperCase()}</span>
-            <button onClick={() => s.rotateObject(axis, -90)}>−90°</button>
-            <button onClick={() => s.rotateObject(axis, 90)}>+90°</button>
-            <span className="axis-val">{rot[axis]}°</span>
+            <button title={`Rotate ${axis.toUpperCase()} −90°`} onClick={() => s.rotateObject(axis, -90)}>
+              −90°
+            </button>
+            <button title={`Rotate ${axis.toUpperCase()} +90°`} onClick={() => s.rotateObject(axis, 90)}>
+              +90°
+            </button>
           </div>
         ))}
       </div>
+
       <div className="btn-row">
-        <button
-          className="subtle"
-          disabled={rot.x === 0 && rot.y === 0 && rot.z === 0}
-          onClick={() => s.setObjectRotation({ x: 0, y: 0, z: 0 })}
-        >
-          Reset orientation
+        <button className="subtle" disabled={identity} onClick={() => s.resetTransform()}>
+          Reset transform
         </button>
       </div>
       <p className="hint">
-        Rotates the whole model (e.g. stand the carton upright). It always re-centers and rests on
-        the ground.
+        Moves / rotates / scales the <b>whole object</b>. Press <b>W</b>/<b>E</b>/<b>R</b> for the
+        gizmo in the 3D view (in Object or Face mode). For a single edge ring, switch to <b>Edge</b>
+        mode (3) — then W drags the ring to resize the model.
       </p>
     </Section>
+  )
+}
+
+function round(n: number): number {
+  return Math.round(n * 1000) / 1000
+}
+
+/**
+ * Edge-ring reshape: with edges selected in edge mode, nudge the ring along its
+ * own axis to resize the model (e.g. shorten a carton). Drives the underlying
+ * dieline vertices and refolds — the same thing the in-view drag does, but exact.
+ */
+function EdgeRingSection() {
+  const s = useAppStore()
+  // Reshape is a dieline edit, so it also works on a folded (scrubbed) pose —
+  // only block it during active playback.
+  const editMode = !(s.playback.mode === 'scrub' && s.playback.playing)
+  if (s.selectMode !== 'edge' || s.selectedEdges.length === 0) return null
+
+  function nudge(amount: number) {
+    const st = useAppStore.getState()
+    const ids = edgesVertexIds(st.doc, st.selectedEdges)
+    const axis = edgesAxis(st.doc, st.selectedEdges)
+    const res = moveVertices(st.doc, ids, { x: axis.x * amount, y: axis.y * amount })
+    if ('doc' in res && res.doc !== st.doc) {
+      st.dispatch({ type: 'setDoc', label: 'reshape edge ring', prev: st.doc, next: res.doc })
+    }
+  }
+
+  return (
+    <Section id="edgering" title="Edge ring">
+      <div className="sel-name">{s.selectedEdges.length} edge(s) selected</div>
+      <p className="hint">
+        This resizes the <b>selected ring</b> (not the whole object). Move it along its axis to
+        resize the model (outward grows, inward shrinks). With the <b>Move</b> tool (W) drag the
+        orange arrow — or the ring itself — in the 3D view.
+      </p>
+      <div className="btn-row presets">
+        <button disabled={!editMode} onClick={() => nudge(-1)} title="Move ring inward 1 unit">
+          −1
+        </button>
+        <button disabled={!editMode} onClick={() => nudge(-0.5)}>
+          −0.5
+        </button>
+        <button disabled={!editMode} onClick={() => nudge(0.5)}>
+          +0.5
+        </button>
+        <button disabled={!editMode} onClick={() => nudge(1)} title="Move ring outward 1 unit">
+          +1
+        </button>
+      </div>
+      <MoveByField onApply={nudge} disabled={!editMode} />
+    </Section>
+  )
+}
+
+/** A "move by [amount] [Apply]" row that clears after applying. */
+function MoveByField({ onApply, disabled }: { onApply: (n: number) => void; disabled: boolean }) {
+  const [text, setText] = useState('')
+  function apply() {
+    const n = Number(text)
+    if (text !== '' && Number.isFinite(n) && n !== 0) onApply(n)
+    setText('')
+  }
+  return (
+    <label className="xform-scale">
+      <span>Move by</span>
+      <input
+        type="number"
+        className="xform-num"
+        step={0.25}
+        disabled={disabled}
+        value={text}
+        placeholder="0"
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') apply()
+        }}
+      />
+      <button disabled={disabled} onClick={apply}>
+        Apply
+      </button>
+    </label>
   )
 }
 
