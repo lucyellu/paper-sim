@@ -16,3 +16,6 @@ Screenshot*.png
 main.*.jpg
 
 *.log
+
+# generated print-ready PDFs (may embed third-party reference artwork)
+print/
