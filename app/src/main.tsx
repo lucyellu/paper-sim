@@ -13,6 +13,7 @@ import {
   edgeRing,
   edgesAxis,
   edgesVertexIds,
+  ringRegionVertexIds,
   rowFaceIds,
   sheetBounds,
 } from './model/document'
@@ -25,6 +26,7 @@ import { templateSteps } from './model/templates'
 import {
   dielineArtworkDataUrl,
   dielinePDF,
+  dielinePDFTrueScale,
   dielineSVG,
   dielineTextureCanvas,
   dielineTexturePNG,
@@ -46,6 +48,7 @@ if (import.meta.env.DEV) {
     editing,
     dielineSVG,
     dielinePDF,
+    dielinePDFTrueScale,
     dielineTextureCanvas,
     dielineTexturePNG,
     dielineArtworkDataUrl,
@@ -54,6 +57,7 @@ if (import.meta.env.DEV) {
     columnFaceIds,
     edgeRing,
     edgesVertexIds,
+    ringRegionVertexIds,
     edgesAxis,
     sheetBounds,
     bakeMesh,

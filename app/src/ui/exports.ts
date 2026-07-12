@@ -191,6 +191,109 @@ export async function dielinePDF(
   return pdf.save()
 }
 
+/** PDF points per dieline unit: 1 unit = 1 cm (72 pt = 1 inch = 2.54 cm). */
+const CM_TO_PT = 72 / 2.54
+
+/**
+ * The dieline at TRUE physical scale (1 unit = 1 cm, print at 100%): the
+ * printable counterpart of dielinePDF's fit-to-page preview. A dieline that
+ * fits one A4 page is centered; a bigger one tiles across pages row by row
+ * (top-left first) with a trim frame around each tile's content. Every page
+ * footer states the scale; the first page carries a 5 cm calibration bar so a
+ * mis-scaled print is obvious. Artwork (when a material is passed) embeds
+ * once and is drawn per tile under vector line work.
+ */
+export async function dielinePDFTrueScale(
+  doc: PaperDoc,
+  title: string,
+  material?: MaterialSettings,
+): Promise<Blob> {
+  const { min, max } = sheetBounds(doc)
+  const padCm = 0.25 // breathing room so cut lines don't sit on the trim frame
+  const sheetW = (max.x - min.x + 2 * padCm) * CM_TO_PT
+  const sheetH = (max.y - min.y + 2 * padCm) * CM_TO_PT
+  const m = 24 // page margin (pt) — printable on typical printers
+  const footerH = 26
+  const layout = (pw: number, ph: number) => {
+    const cw = pw - 2 * m
+    const ch = ph - 2 * m - footerH
+    return { pw, ph, cw, ch, cols: Math.ceil(sheetW / cw), rows: Math.ceil(sheetH / ch) }
+  }
+  const portrait = layout(595, 842)
+  const landscape = layout(842, 595)
+  const lay =
+    landscape.cols * landscape.rows < portrait.cols * portrait.rows ? landscape : portrait
+  const single = lay.cols === 1 && lay.rows === 1
+
+  const pdf = new Pdf()
+  let artIdx = -1
+  if (material) {
+    const art = canvasToJpeg(await buildSheetCanvas(doc, material))
+    artIdx = pdf.addImage(art.bytes, art.w, art.h)
+  }
+  const pos = (id: number) => doc.vertices.find((v) => v.id === id)!.pos
+
+  for (let r = 0; r < lay.rows; r++) {
+    for (let c = 0; c < lay.cols; c++) {
+      pdf.addPage(lay.pw, lay.ph)
+      const contentX = m
+      const contentY = m + footerH
+      // Sheet-space -> page-space: pageX = ox + x·S, pageY = oy + y·S. Tile
+      // (r,c) shows the band [c·cw, (c+1)·cw] × [top − (r+1)·ch, top − r·ch].
+      const cx = single ? contentX + (lay.cw - sheetW) / 2 : contentX
+      const cyTop = single ? contentY + (lay.ch + sheetH) / 2 : contentY + lay.ch
+      const ox = cx - (min.x - padCm) * CM_TO_PT - c * lay.cw
+      const oy = cyTop - (max.y + padCm) * CM_TO_PT + r * lay.ch
+      pdf.pushClip(contentX, contentY, lay.cw, lay.ch)
+      if (artIdx >= 0) {
+        pdf.drawImage(
+          artIdx,
+          ox + min.x * CM_TO_PT,
+          oy + min.y * CM_TO_PT,
+          (max.x - min.x) * CM_TO_PT,
+          (max.y - min.y) * CM_TO_PT,
+        )
+      }
+      for (const e of doc.edges) {
+        const a = pos(e.v1)
+        const b = pos(e.v2)
+        const isCut = e.kind === 'cut'
+        const target = doc.targetAngles?.[e.id]
+        const color: RGB = isCut ? PDF_INK : (target ?? 0) < 0 ? [0.86, 0.15, 0.15] : [0.15, 0.39, 0.92]
+        pdf.line(
+          ox + a.x * CM_TO_PT,
+          oy + a.y * CM_TO_PT,
+          ox + b.x * CM_TO_PT,
+          oy + b.y * CM_TO_PT,
+          isCut ? 1.1 : 0.8,
+          color,
+          isCut ? undefined : [3.5, 2.2],
+        )
+      }
+      pdf.pop()
+      if (!single) {
+        // Trim frame: cut here and butt tiles edge-to-edge to reassemble.
+        pdf.rect(contentX, contentY, lay.cw, lay.ch, 0.5, [0.7, 0.66, 0.58])
+      }
+      const tile = single ? '' : ` · tile ${r + 1},${c + 1} of ${lay.rows}×${lay.cols} (cut on the gray frame, butt tiles together)`
+      pdf.text(m, m + 6, 8, `${title} — dieline · TRUE SCALE (1 unit = 1 cm) · print at 100%, no fit-to-page${tile}`, {
+        color: PDF_MUTED,
+      })
+      if (r === 0 && c === 0) {
+        // 5 cm calibration bar, right-aligned in the footer.
+        const barW = 5 * CM_TO_PT
+        const bx = lay.pw - m - barW
+        const by = m + 8
+        pdf.line(bx, by, bx + barW, by, 1, PDF_INK)
+        pdf.line(bx, by - 3, bx, by + 3, 1, PDF_INK)
+        pdf.line(bx + barW, by - 3, bx + barW, by + 3, 1, PDF_INK)
+        pdf.text(bx + barW / 2 - 14, by + 5, 8, '5 cm', { color: PDF_INK })
+      }
+    }
+  }
+  return pdf.save()
+}
+
 async function pngDataUrlToJpeg(
   dataUrl: string,
 ): Promise<{ bytes: Uint8Array; w: number; h: number }> {

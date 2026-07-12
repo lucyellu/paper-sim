@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { edgesAxis, edgesVertexIds } from '../model/document'
+import { edgesAxis, ringRegionVertexIds } from '../model/document'
 import { moveVertices } from '../model/editing'
 import type { MaterialSettings } from '../model/material'
 import { isDeformerOp } from '../model/ops'
@@ -273,7 +273,7 @@ function EdgeRingBody() {
 
   function nudge(amount: number) {
     const st = useAppStore.getState()
-    const ids = edgesVertexIds(st.doc, st.selectedEdges)
+    const ids = ringRegionVertexIds(st.doc, st.selectedEdges)
     const axis = edgesAxis(st.doc, st.selectedEdges)
     const res = moveVertices(st.doc, ids, { x: axis.x * amount, y: axis.y * amount })
     if ('doc' in res && res.doc !== st.doc) {

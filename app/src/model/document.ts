@@ -267,6 +267,33 @@ export function edgesVertexIds(doc: PaperDoc, edgeIds: number[]): number[] {
 }
 
 /**
+ * Vertices moved by an edge-ring reshape: the ring's own vertices PLUS every
+ * vertex beyond the ring line along the reshape axis. The whole region past
+ * the ring translates rigidly, so panels beyond it (e.g. a carton's gable
+ * top) keep their exact shape and their derived fold targets stay valid —
+ * only the band behind the ring stretches. Moving just the ring's own
+ * vertices would shear the panels beyond it and the fold no longer closes.
+ */
+export function ringRegionVertexIds(doc: PaperDoc, edgeIds: number[]): number[] {
+  const ringIds = new Set(edgesVertexIds(doc, edgeIds))
+  if (ringIds.size === 0) return []
+  const axis = edgesAxis(doc, edgeIds)
+  const proj = (v: Vertex) => v.pos.x * axis.x + v.pos.y * axis.y
+  // Ring line coordinate = the innermost axis-projection among ring vertices.
+  let ringCoord = Infinity
+  let min = Infinity
+  let max = -Infinity
+  for (const v of doc.vertices) {
+    const p = proj(v)
+    if (ringIds.has(v.id)) ringCoord = Math.min(ringCoord, p)
+    if (p < min) min = p
+    if (p > max) max = p
+  }
+  const eps = Math.max(1e-6, (max - min) * 1e-4)
+  return doc.vertices.filter((v) => ringIds.has(v.id) || proj(v) >= ringCoord - eps).map((v) => v.id)
+}
+
+/**
  * Unit flat-space axis perpendicular to a set of (roughly parallel) edges —
  * the direction the ring moves to grow/shrink the model along it. Oriented to
  * point away from the sheet centre (so "positive" is outward).

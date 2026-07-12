@@ -6,7 +6,7 @@ import {
   columnFaceIds,
   edgeRing,
   edgesAxis,
-  edgesVertexIds,
+  ringRegionVertexIds,
   rowFaceIds,
   sheetBounds,
   type PanelTree,
@@ -567,7 +567,9 @@ export function ThreeView() {
       s: ReturnType<typeof useAppStore.getState>,
       camera: THREE.Camera,
     ): ReshapeState | null {
-      const vertexIds = edgesVertexIds(s.doc, s.selectedEdges)
+      // Move the whole region beyond the ring, not just the ring's own
+      // vertices — panels past the ring keep their shape so folds stay valid.
+      const vertexIds = ringRegionVertexIds(s.doc, s.selectedEdges)
       if (vertexIds.length === 0) return null
       const rw = edgeRingWorld(s)
       if (!rw) return null

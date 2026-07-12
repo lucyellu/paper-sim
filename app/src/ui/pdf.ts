@@ -38,6 +38,24 @@ export class Pdf {
     )
   }
 
+  /** Stroke a rectangle outline. */
+  rect(x: number, y: number, w: number, h: number, width: number, color: RGB, dash?: number[]): void {
+    const d = dash && dash.length > 0 ? `[${dash.map(n2).join(' ')}] 0 d` : '[] 0 d'
+    this.page().ops.push(
+      `${color.map(n2).join(' ')} RG ${n2(width)} w ${d} ${n2(x)} ${n2(y)} ${n2(w)} ${n2(h)} re S`,
+    )
+  }
+
+  /** Clip subsequent drawing to a rect. Balance every call with pop(). */
+  pushClip(x: number, y: number, w: number, h: number): void {
+    this.page().ops.push(`q ${n2(x)} ${n2(y)} ${n2(w)} ${n2(h)} re W n`)
+  }
+
+  /** Restore the graphics state saved by pushClip. */
+  pop(): void {
+    this.page().ops.push('Q')
+  }
+
   text(x: number, y: number, size: number, str: string, opts?: { bold?: boolean; color?: RGB }): void {
     const color: RGB = opts?.color ?? [0, 0, 0]
     const font = opts?.bold ? '/F2' : '/F1'
@@ -51,11 +69,20 @@ export class Pdf {
     return str.length * size * 0.5
   }
 
+  /** Register a JPEG once; draw it any number of times with drawImage. */
+  addImage(bytes: Uint8Array, pxW: number, pxH: number): number {
+    this.images.push({ bytes, w: pxW, h: pxH })
+    return this.images.length - 1
+  }
+
+  /** Draw a registered image into the rect x,y,w,h. */
+  drawImage(idx: number, x: number, y: number, w: number, h: number): void {
+    this.page().ops.push(`q ${n2(w)} 0 0 ${n2(h)} ${n2(x)} ${n2(y)} cm /Im${idx} Do Q`)
+  }
+
   /** Draw a JPEG (raw bytes + pixel size) into the rect x,y,w,h. */
   imageJpeg(bytes: Uint8Array, pxW: number, pxH: number, x: number, y: number, w: number, h: number): void {
-    this.images.push({ bytes, w: pxW, h: pxH })
-    const name = `/Im${this.images.length - 1}`
-    this.page().ops.push(`q ${n2(w)} 0 0 ${n2(h)} ${n2(x)} ${n2(y)} cm ${name} Do Q`)
+    this.drawImage(this.addImage(bytes, pxW, pxH), x, y, w, h)
   }
 
   save(): Blob {

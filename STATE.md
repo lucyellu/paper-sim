@@ -12,7 +12,7 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs`
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
 4. Next: remaining **v1** items (below) — SVG dieline import, per-hinge limits, materials,
@@ -54,6 +54,10 @@ and image/text→crease-pattern generation are future phases.
 | 2026-07-10 | **Collision/self-intersection constraints deferred** | Start with per-hinge angle limits only. Finesse later once core controls feel right. |
 | 2026-07-10 | **Lucky star is a stress test, not a v0 target** | Strip curving/knotting and the final "puff" are non-rigid. Approximations exist (micro-crease fans for bends; inflate morph for puff) — revisit in v1+. v0 targets: box/carton, simple traditional folds. |
 | 2026-07-10 | **Art direction: cozy hand-crafted paper look** | Per `reference/GUI/` — warm palette, paper textures, craft-book feel. |
+| 2026-07-11 | **No freeform UV/mesh-UV editor — UVs stay locked to dieline flat coords** | The 3D view must be a truthful mockup of the printed object; a UV editor whose only power is making the preview diverge from the print is an anti-feature. Artwork control lives in the dieline-space Texture tool (`overlayTransform`), which changes print + 3D together. Two-sided (inside/outside) material is the legit future gap. |
+| 2026-07-11 | **1 dieline unit = 1 cm (physical scale)** | Print-and-fold is the product promise; exports need real dimensions. True-scale PDF export prints at 100% with a 5 cm calibration bar; tiles across A4 pages when bigger. |
+| 2026-07-11 | **Edge-ring reshape translates the whole region beyond the ring** | Moving only the ring's own vertices sheared the panels past it (gable top squashed → derived targets invalid → "exploding carton"). `ringRegionVertexIds` moves every vertex at-or-beyond the ring line along the axis, so the cap keeps its exact shape and folds stay valid; only the band behind the ring stretches. |
+| 2026-07-11 | **Photo-of-product → dieline = classify-to-parametric-template pipeline, NOT a trained generative model** | Image models produce plausible-looking but unfoldable/unregistered dielines. Instead: VLM classifies packaging archetype + estimates dims → parametric builder outputs guaranteed-foldable geometry; artwork recovered by unwarping visible faces (generative fill only for hidden faces). An import wizard in-app, not a separate app. Prereq: more parametric archetypes. |
 
 ## Open questions (unresolved)
 
@@ -182,6 +186,11 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
       2026-07-11
 - [x] Trace-backdrop tool: load a saved dieline image behind the dieline editor (drag / scale /
       opacity), draw cuts+creases over it. Session-only (`store.backdrop`, not saved) — 2026-07-11
+- [x] True-scale (1:1) printable PDF: 1 unit = 1 cm, print at 100%, 5 cm calibration bar,
+      tiles across A4 pages with trim frames when the sheet is bigger (line art + artwork
+      variants; `dielinePDFTrueScale`) — 2026-07-11
+- [x] Edge-ring reshape fix: rigid translation of the whole region beyond the ring
+      (`ringRegionVertexIds`) — shortening a carton no longer explodes the gable — 2026-07-11
 - [ ] Per-hinge angle limits (basic constraints)
 - [ ] Animation export (GIF/MP4)
 - [ ] Starter model library from `reference/` (gift box, cup, boat, peacock…)
@@ -236,6 +245,29 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 ## Progress log
 
 *(newest first)*
+
+- **2026-07-11 (later)** — **Trustworthy reshape + print-ready PDF round** (user assessment session:
+  "prioritize the dieline so people can print the PDF and fold it in real life"; reported the
+  edge-ring move exploding the milk carton when shortening it).
+  - **Exploding-carton fix**: ring drags/nudges moved only the ring's own vertices, shearing the
+    gable panels above and invalidating their derived fold targets. New `ringRegionVertexIds`
+    (`model/document.ts`) returns the ring vertices plus every vertex beyond the ring line along
+    the reshape axis; both call sites (`ThreeView.beginReshape`, DetailsPanel nudge) now translate
+    that whole region rigidly. Verified: shortening the rect gable by 3 keeps the folded
+    cross-section exactly 5 × 3.2 and reduces length by exactly 3 (was: gable spikes / explosion).
+  - **True-scale PDF export** (`dielinePDFTrueScale` in `ui/exports.ts`): 1 unit = 1 cm at 100%
+    print scale, footer states the scale on every page, first page has a 5 cm calibration bar;
+    auto orientation; sheets bigger than one A4 tile row-major with a gray trim frame and
+    tile labels. Artwork variant draws the sheet texture under vector line work, embedding the
+    JPEG once (shared XObject) regardless of tile count. Pdf writer gained rect/pushClip/pop and
+    addImage/drawImage. Export menu: "Print-ready PDF — true scale 1:1" (+ artwork variant).
+  - **Decisions recorded** (see Core decisions): no freeform UV editor (print fidelity is the
+    product), 1 unit = 1 cm, photo→dieline = parametric-template pipeline not a trained model.
+  - **Verify**: new `scripts/verify-v7.mjs` (shoulder-ring region > ring, cap edge lengths exactly
+    preserved, folded closure at new height, store reshape undo, true-scale PDF single-page /
+    tiled / artwork-embed-once). Whole suite verify…v7 green, zero page errors.
+  - **Next per assessment**: SVG dieline import (PackCAD color mapping) + fan group-fold, then
+    assisted raster-dieline trace, then the photo→template import wizard.
 
 - **2026-07-11** — **Image→dieline, can template, textured export round** (user asked: fold a real
   dieline image — a strawberry-milk carton — plus a can, and export the artwork not just blank lines).

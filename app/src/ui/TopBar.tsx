@@ -9,6 +9,7 @@ import { useAppStore, type AppState, type Template, type TemplateDims } from '..
 import {
   dielineArtworkDataUrl,
   dielinePDF,
+  dielinePDFTrueScale,
   dielineSVG,
   dielineTexturePNG,
   downloadBlob,
@@ -191,6 +192,24 @@ export function TopBar() {
       onClick: () =>
         dielinePDF(s.doc, s.projectName, s.material)
           .then((pdf) => downloadBlob(pdf, nextExportName(s.projectName, 'dieline_art', 'pdf')))
+          .catch((e) => alert(`PDF export failed: ${e}`)),
+    },
+    {
+      label: 'Print-ready PDF — true scale 1:1',
+      title: 'Exact physical size (1 unit = 1 cm) — print at 100%; tiles across pages when bigger than A4',
+      onClick: () =>
+        dielinePDFTrueScale(s.doc, s.projectName)
+          .then((pdf) => downloadBlob(pdf, nextExportName(s.projectName, 'dieline_1to1', 'pdf')))
+          .catch((e) => alert(`PDF export failed: ${e}`)),
+    },
+    {
+      label: 'Print-ready PDF — true scale, with artwork',
+      title: hasArt
+        ? 'Exact physical size with the printed design — print at 100%, cut, fold'
+        : 'Add a design in the dieline editor (Texture tool) to include artwork',
+      onClick: () =>
+        dielinePDFTrueScale(s.doc, s.projectName, s.material)
+          .then((pdf) => downloadBlob(pdf, nextExportName(s.projectName, 'dieline_art_1to1', 'pdf')))
           .catch((e) => alert(`PDF export failed: ${e}`)),
     },
     {
