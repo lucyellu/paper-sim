@@ -151,6 +151,18 @@ export function TopBar() {
       onClick: () => newDoc('gable', 'milk carton'),
     },
     { label: 'New — Can label (tube)', title: 'Faceted cylinder — wrap a label around a can', onClick: () => newDoc('can', 'can label') },
+    {
+      label: 'New — Juice box sleeve',
+      title:
+        'Open-ended band that slips over a standard 200 ml juice box (like a phone case for your drink) — print, fold, glue, slide on',
+      onClick: () => newDoc('sleeve', 'juice box sleeve', { width: 5.5, depth: 4.3, height: 7, seam: true }),
+    },
+    {
+      label: 'New — Can sleeve (12 oz)',
+      title:
+        'Faceted band sized to slip over a standard 12 oz drink can — print, fold, glue, slide on',
+      onClick: () => newDoc('can', 'can sleeve', { facets: 24, height: 9, radius: 3.45, seam: true }),
+    },
     { label: '', separator: true },
     {
       label: 'Import dieline image…',

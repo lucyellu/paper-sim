@@ -15,6 +15,9 @@ import { buildZip, dataUrlBytes, type ZipEntry } from './zip'
 
 const PDF_INK: RGB = [0.23, 0.2, 0.15]
 const PDF_MUTED: RGB = [0.48, 0.42, 0.31]
+/** US Letter (8.5×11 in) — the paper in the target audience's home printer. */
+const PAGE_W = 612
+const PAGE_H = 792
 const PDF_LEGEND = 'solid = cut   ·   dashed blue = valley fold   ·   dashed red = mountain fold'
 
 /**
@@ -169,7 +172,7 @@ export async function dielinePDF(
 ): Promise<Blob> {
   const { min, max } = sheetBounds(doc)
   const landscape = max.x - min.x > max.y - min.y
-  const [pw, ph] = landscape ? [842, 595] : [595, 842]
+  const [pw, ph] = landscape ? [PAGE_H, PAGE_W] : [PAGE_W, PAGE_H]
   const pdf = new Pdf()
   pdf.addPage(pw, ph)
   const m = 48
@@ -219,8 +222,8 @@ export async function dielinePDFTrueScale(
     const ch = ph - 2 * m - footerH
     return { pw, ph, cw, ch, cols: Math.ceil(sheetW / cw), rows: Math.ceil(sheetH / ch) }
   }
-  const portrait = layout(595, 842)
-  const landscape = layout(842, 595)
+  const portrait = layout(PAGE_W, PAGE_H)
+  const landscape = layout(PAGE_H, PAGE_W)
   const lay =
     landscape.cols * landscape.rows < portrait.cols * portrait.rows ? landscape : portrait
   const single = lay.cols === 1 && lay.rows === 1
@@ -276,7 +279,7 @@ export async function dielinePDFTrueScale(
         pdf.rect(contentX, contentY, lay.cw, lay.ch, 0.5, [0.7, 0.66, 0.58])
       }
       const tile = single ? '' : ` · tile ${r + 1},${c + 1} of ${lay.rows}×${lay.cols} (cut on the gray frame, butt tiles together)`
-      pdf.text(m, m + 6, 8, `${title} — dieline · TRUE SCALE (1 unit = 1 cm) · print at 100%, no fit-to-page${tile}`, {
+      pdf.text(m, m + 6, 8, `${title} — dieline · TRUE SCALE (1 unit = 1 cm) · print at 100% on US Letter, no fit-to-page${tile}`, {
         color: PDF_MUTED,
       })
       if (r === 0 && c === 0) {
@@ -322,8 +325,8 @@ export async function instructionsPDF(
   const shots = await Promise.all(capturePoses(poses, { w: 720, h: 540 }).map(pngDataUrlToJpeg))
 
   const pdf = new Pdf()
-  const pw = 595
-  const ph = 842
+  const pw = PAGE_W
+  const ph = PAGE_H
   const m = 48
   pdf.addPage(pw, ph)
   pdf.text(m, ph - m, 18, `${title} — folding instructions`, { bold: true, color: PDF_INK })

@@ -43,6 +43,9 @@ export function templateSteps(template: Template, doc: PaperDoc): Step[] {
     // wrapping the flat label strip into a cylinder.
     return stagedSteps(doc, [{ name: 'Roll into a cylinder', match: /panel|seam/ }])
   }
+  if (template === 'sleeve') {
+    return stagedSteps(doc, [{ name: 'Wrap the sleeve', match: /panel|seam/ }])
+  }
   if (template === 'gable') {
     return stagedSteps(doc, [
       { name: 'Fold the body square', match: /^(right side|back|left side|glue flap)$/ },

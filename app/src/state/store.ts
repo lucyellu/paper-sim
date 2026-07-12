@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { buildCarton } from '../model/carton'
 import { buildGableCarton, type GableDims } from '../model/gable'
 import { buildCan, type CanDims } from '../model/can'
+import { buildSleeve, type SleeveDims } from '../model/sleeve'
 import { buildPanelTree, type PanelTree, type PaperDoc } from '../model/document'
 import { fromFoldFile, toFoldFile } from '../model/foldfile'
 import { defaultMaterial, type MaterialSettings } from '../model/material'
@@ -38,9 +39,9 @@ export interface Backdrop {
   h: number
   opacity: number
 }
-export type Template = 'tuck' | 'gable' | 'can'
-/** Optional dimensions when creating a template (rectangular gable, can size). */
-export type TemplateDims = GableDims | CanDims
+export type Template = 'tuck' | 'gable' | 'can' | 'sleeve'
+/** Optional dimensions when creating a template (rectangular gable, can, sleeve size). */
+export type TemplateDims = GableDims | CanDims | SleeveDims
 /** Which component the pointer selects in the 3D view (Maya-style). */
 export type SelectMode = 'object' | 'face' | 'edge'
 /** Active manipulator (Maya Q/W/E/R): none, translate, rotate, scale. */
@@ -135,12 +136,14 @@ export interface AppState {
 function buildTemplate(template: Template, dims?: TemplateDims): PaperDoc {
   if (template === 'gable') return buildGableCarton(dims as GableDims | undefined)
   if (template === 'can') return buildCan(dims as CanDims | undefined)
+  if (template === 'sleeve') return buildSleeve(dims as SleeveDims | undefined)
   return buildCarton()
 }
 
 function defaultProjectName(template: Template): string {
   if (template === 'gable') return 'milk carton'
   if (template === 'can') return 'can'
+  if (template === 'sleeve') return 'sleeve'
   return 'box'
 }
 

@@ -12,7 +12,8 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs`
+   Product direction lives in `VISION.md` (pillars, product ladder, what's parked).
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
 4. Next: remaining **v1** items (below) — SVG dieline import, per-hinge limits, materials,
@@ -57,6 +58,8 @@ and image/text→crease-pattern generation are future phases.
 | 2026-07-11 | **No freeform UV/mesh-UV editor — UVs stay locked to dieline flat coords** | The 3D view must be a truthful mockup of the printed object; a UV editor whose only power is making the preview diverge from the print is an anti-feature. Artwork control lives in the dieline-space Texture tool (`overlayTransform`), which changes print + 3D together. Two-sided (inside/outside) material is the legit future gap. |
 | 2026-07-11 | **1 dieline unit = 1 cm (physical scale)** | Print-and-fold is the product promise; exports need real dimensions. True-scale PDF export prints at 100% with a 5 cm calibration bar; tiles across A4 pages when bigger. |
 | 2026-07-11 | **Edge-ring reshape translates the whole region beyond the ring** | Moving only the ring's own vertices sheared the panels past it (gable top squashed → derived targets invalid → "exploding carton"). `ringRegionVertexIds` moves every vertex at-or-beyond the ring line along the axis, so the cap keeps its exact shape and folds stay valid; only the band behind the ring stretches. |
+| 2026-07-11 | **US Letter (8.5×11) is the default paper, not A4** | The audience prints at home in the US; an A4 PDF at 100% clips ~5 cm on Letter. All PDF exports are Letter; A4 becomes a setting later. |
+| 2026-07-11 | **Sleeves are the product wedge** | Open-ended printed bands that slip over standard products (12 oz can, 200 ml juice box) — forgiving (no waterproofing/closure), expressive, one sheet + one glue seam. Free designs / paid materials (laminate blanks) is the business sketch. Full vision in `VISION.md`. |
 | 2026-07-11 | **Photo-of-product → dieline = classify-to-parametric-template pipeline, NOT a trained generative model** | Image models produce plausible-looking but unfoldable/unregistered dielines. Instead: VLM classifies packaging archetype + estimates dims → parametric builder outputs guaranteed-foldable geometry; artwork recovered by unwarping visible faces (generative fill only for hidden faces). An import wizard in-app, not a separate app. Prereq: more parametric archetypes. |
 
 ## Open questions (unresolved)
@@ -196,6 +199,10 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
       rebuilds the parametric carton at those proportions (user sets body height in cm),
       and auto-registers the artwork via a computed `overlayTransform`
       (`model/dielineImage.ts`, `ui/ImportDielineDialog.tsx`) — 2026-07-11
+- [x] Sleeve templates: `buildSleeve` rectangular band (W·D·W·D + seam, 90° creases) with
+      juice-box preset, plus a 12 oz can-sleeve preset on the can builder; one-step
+      "Wrap the sleeve" fold — 2026-07-11
+- [x] US Letter page size for all PDF exports (true-scale, fit-preview, instructions) — 2026-07-11
 - [ ] Per-hinge angle limits (basic constraints)
 - [ ] Animation export (GIF/MP4)
 - [ ] Starter model library from `reference/` (gift box, cup, boat, peacock…)
@@ -250,6 +257,29 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 ## Progress log
 
 *(newest first)*
+
+- **2026-07-11 (evening)** — **Sleeves + Letter + vision round** (user shared the product vision:
+  CAH-style free-designs/paid-materials, sleeves as expression like phone cases, education angle,
+  eventual "Paperton" gallery/social layer — asked for a onesheet doc + basics).
+  - **`VISION.md` onesheet**: pitch ("turn a standard printer into a 3D printer by folding"),
+    sleeve wedge rationale, product pillars (preview never lies, Letter-first, foldable by
+    construction, free designs/paid materials), product ladder, format-reality answer (jpg/png =
+    wizard ✅, SVG = next, EPS/AI = convert via Inkscape/Ghostscript not a browser parser,
+    CFF2/DXF = out of scope), Paperton parked with remix-lineage prep noted, anti-goals, open
+    questions (laminate/velcro blanks, parody/trademark, kid-proof mode).
+  - **US Letter everywhere**: all three PDF paths (true-scale, fit-preview dieline,
+    instructions) now use 612×792 — an A4 sheet printed at 100% on Letter would have clipped
+    ~5 cm. True-scale footer names the paper. Default 13 cm carton still fits one page.
+  - **Sleeve templates** (`model/sleeve.ts`): rectangular open band W·D·W·D + glue seam, all
+    vertical creases target 90°; File menu "New — Juice box sleeve" (5.5 × 4.3 × 7 cm, fits a
+    200 ml brick with clearance) and "New — Can sleeve (12 oz)" (can-builder preset: 24 facets,
+    r 3.45 → apothem 3.42 cm clears a Ø 6.6 cm can). Store template `'sleeve'` + one-step
+    "Wrap the sleeve" fold.
+  - **Verify**: new `scripts/verify-v9.mjs` (sleeve folds to exactly W×D×H, store round-trip,
+    can-sleeve clearance math, Letter MediaBox + one-page true-scale). Whole suite verify…v9
+    green, zero page errors.
+  - **Next**: user prints + folds a sleeve/carton for real (physical feedback round), then SVG
+    dieline import + fan folds.
 
 - **2026-07-11 (latest)** — **Image → dieline round** (user: "most reference dielines are just
   jpgs/pngs — how can we get image → dieline going, with printouts matching expectations?

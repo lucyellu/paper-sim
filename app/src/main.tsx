@@ -7,6 +7,7 @@ import { fromFoldFile, toFoldFile } from './model/foldfile'
 import { buildCarton } from './model/carton'
 import { buildGableCarton } from './model/gable'
 import { buildCan } from './model/can'
+import { buildSleeve } from './model/sleeve'
 import {
   buildPanelTree,
   columnFaceIds,
@@ -43,6 +44,7 @@ if (import.meta.env.DEV) {
     buildCarton,
     buildGableCarton,
     buildCan,
+    buildSleeve,
     buildPanelTree,
     computeFaceMatrices,
     degToRad,
