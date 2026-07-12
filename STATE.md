@@ -12,7 +12,7 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs`
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
 4. Next: remaining **v1** items (below) — SVG dieline import, per-hinge limits, materials,
@@ -191,6 +191,11 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
       variants; `dielinePDFTrueScale`) — 2026-07-11
 - [x] Edge-ring reshape fix: rigid translation of the whole region beyond the ring
       (`ringRegionVertexIds`) — shortening a carton no longer explodes the gable — 2026-07-11
+- [x] Image → dieline import wizard (File → "Import dieline image…"): measures a raster
+      dieline picture (content box, wall fold lines, body band → full GableDims ratios),
+      rebuilds the parametric carton at those proportions (user sets body height in cm),
+      and auto-registers the artwork via a computed `overlayTransform`
+      (`model/dielineImage.ts`, `ui/ImportDielineDialog.tsx`) — 2026-07-11
 - [ ] Per-hinge angle limits (basic constraints)
 - [ ] Animation export (GIF/MP4)
 - [ ] Starter model library from `reference/` (gift box, cup, boat, peacock…)
@@ -245,6 +250,35 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 ## Progress log
 
 *(newest first)*
+
+- **2026-07-11 (latest)** — **Image → dieline round** (user: "most reference dielines are just
+  jpgs/pngs — how can we get image → dieline going, with printouts matching expectations?
+  Adjusting UVs to make it look right would be cheating").
+  - **Diagnosis of the "wonky texture"**: two separable causes — (1) the raster has background
+    margins but the overlay stretched the whole image over the whole sheet, and (2) the open
+    project's template proportions didn't match the pictured carton, so panel seams can't align
+    under ANY global stretch. Confirmed the fix is geometry-first, not UV remapping.
+  - **`model/dielineImage.ts` analyzer**: foreground mask (alpha, else corner-sampled background
+    color) → content box; body band = rows where the drawing spans full width; wall fold lines =
+    column-gradient-energy peaks over the body band, best W·D·W·D(+glue) split chosen
+    combinatorially; body top/bottom = strongest row-energy pair ≥35% height apart; gable corner
+    line, per-column bottom-flap depths, glue width. Outputs scale-free `GableRatios`, a
+    confidence (good/rough/none), and an `overlayTransform` that maps the content box exactly
+    onto the sheet bounds (registration is exact by construction). NOT free-form vectorization —
+    panel-grid estimation for a known archetype, per the roadmap decision.
+  - **Import wizard** (`ui/ImportDielineDialog.tsx`, File → "Import dieline image…"): preview
+    with detected box/lines drawn, "Body height (cm)" drives all dims proportionally (each
+    editable), Build = `newDocument('gable', dims)` + registered overlay + project name from the
+    file. Falls back gracefully (default carton + artwork fit) when no grid is found.
+  - **Verified** (`scripts/verify-v8.mjs`): synthetic known-grid image recovered exactly
+    (confidence `good`); real strawberry PNG → W=5.91 D=3.7 at H=13, overlay maps content box to
+    exactly 0..1, carton builds + folds closed at those dims; end-to-end store path renders the
+    textured dieline. Interactive smoke: wizard dialog → Build → folded carton renders with the
+    label registered panel-per-panel. Whole suite verify…v8 green, zero page errors.
+  - **Scope notes**: gable-carton archetype only (matches most drink-carton refs); depth-first
+    (D·W·D·W) layouts and other archetypes (tuck box, sleeve, cup carrier) flag `rough` / fall
+    back — extend by adding per-archetype grid models later. Photo-of-3D-product → dieline is
+    still the separate v2 pipeline (VLM classify → parametric dims → unwarp artwork).
 
 - **2026-07-11 (later)** — **Trustworthy reshape + print-ready PDF round** (user assessment session:
   "prioritize the dieline so people can print the PDF and fold it in real life"; reported the

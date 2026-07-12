@@ -23,6 +23,7 @@ import { bakeMesh } from './model/meshExport'
 import { buildMtl, buildObj } from './model/objExport'
 import { buildFbxAscii } from './model/fbxExport'
 import { templateSteps } from './model/templates'
+import { analyzeDielineImage, analyzeImageData, gableDimsFromAnalysis } from './model/dielineImage'
 import {
   dielineArtworkDataUrl,
   dielinePDF,
@@ -65,6 +66,9 @@ if (import.meta.env.DEV) {
     buildMtl,
     buildFbxAscii,
     templateSteps,
+    analyzeDielineImage,
+    analyzeImageData,
+    gableDimsFromAnalysis,
   }
 }
 

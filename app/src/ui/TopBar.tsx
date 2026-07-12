@@ -19,6 +19,8 @@ import {
   openInstructionSheet,
 } from './exports'
 import { materialNeedsTexture } from '../viewer/texture'
+import { analyzeDielineImage, type DielineImageAnalysis } from '../model/dielineImage'
+import { ImportDielineDialog } from './ImportDielineDialog'
 import { exportMesh, type MeshFormat, type MeshPose } from './meshExport'
 
 interface MenuItemDef {
@@ -77,7 +79,13 @@ function Menu({
 export function TopBar() {
   const s = useAppStore()
   const fileInput = useRef<HTMLInputElement>(null)
+  const imageInput = useRef<HTMLInputElement>(null)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const [importDialog, setImportDialog] = useState<{
+    dataUrl: string
+    fileName: string
+    analysis: DielineImageAnalysis
+  } | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
   // Click-away closes any open menu.
@@ -92,6 +100,19 @@ export function TopBar() {
 
   function newDoc(template: Template, label: string, dims?: TemplateDims) {
     if (confirm(`Start a new ${label}? Unsaved work will be lost.`)) s.newDocument(template, dims)
+  }
+
+  async function onImportImage(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const dataUrl = await fileToDataUrl(file)
+      const analysis = await analyzeDielineImage(dataUrl)
+      setImportDialog({ dataUrl, fileName: file.name, analysis })
+    } catch (err) {
+      alert(`Could not read image: ${err instanceof Error ? err.message : err}`)
+    }
   }
 
   async function onLoadFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -130,6 +151,13 @@ export function TopBar() {
       onClick: () => newDoc('gable', 'milk carton'),
     },
     { label: 'New — Can label (tube)', title: 'Faceted cylinder — wrap a label around a can', onClick: () => newDoc('can', 'can label') },
+    { label: '', separator: true },
+    {
+      label: 'Import dieline image…',
+      title:
+        'Measure a flat dieline picture (jpg/png), rebuild the carton at its proportions, and register the artwork onto it',
+      onClick: () => imageInput.current?.click(),
+    },
     { label: '', separator: true },
     { label: 'Open…', onClick: () => fileInput.current?.click(), title: 'Open a PaperSim or FOLD file' },
     { label: 'Save (.fold)', onClick: () => s.saveFile() },
@@ -267,6 +295,44 @@ export function TopBar() {
         style={{ display: 'none' }}
         onChange={onLoadFile}
       />
+      <input
+        ref={imageInput}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={onImportImage}
+      />
+      {importDialog && (
+        <ImportDielineDialog
+          dataUrl={importDialog.dataUrl}
+          fileName={importDialog.fileName}
+          analysis={importDialog.analysis}
+          onClose={() => setImportDialog(null)}
+        />
+      )}
     </div>
   )
+}
+
+/** Read an image file as a data URL, downscaled so stored textures stay light. */
+async function fileToDataUrl(file: File, maxDim = 2048): Promise<string> {
+  const raw = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as string)
+    r.onerror = () => reject(new Error('could not read file'))
+    r.readAsDataURL(file)
+  })
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const el = new Image()
+    el.onload = () => resolve(el)
+    el.onerror = () => reject(new Error('could not decode image'))
+    el.src = raw
+  })
+  if (Math.max(img.width, img.height) <= maxDim) return raw
+  const scale = maxDim / Math.max(img.width, img.height)
+  const c = document.createElement('canvas')
+  c.width = Math.round(img.width * scale)
+  c.height = Math.round(img.height * scale)
+  c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height)
+  return c.toDataURL('image/png')
 }

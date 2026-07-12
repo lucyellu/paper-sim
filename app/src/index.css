@@ -1041,3 +1041,58 @@ button.step-num {
   font: inherit;
   text-align: right;
 }
+
+/* ---- Import-dieline wizard modal ---- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 16, 10, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  width: min(520px, 92vw);
+  max-height: 92vh;
+  overflow: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.modal h2 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+.import-preview {
+  display: block;
+  margin: 8px auto;
+  max-width: 100%;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: #fff;
+}
+.import-dims {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px 10px;
+  margin: 10px 0;
+}
+.import-dim {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.78rem;
+}
+.import-dim input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.import-dim-primary {
+  grid-column: span 2;
+}
+.import-dim-primary span {
+  font-weight: 600;
+}
