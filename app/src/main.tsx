@@ -25,6 +25,8 @@ import { buildMtl, buildObj } from './model/objExport'
 import { buildFbxAscii } from './model/fbxExport'
 import { templateSteps } from './model/templates'
 import { analyzeDielineImage, analyzeImageData, gableDimsFromAnalysis } from './model/dielineImage'
+import { applyFaceUV, faceUVAffine, faceUVCentroid, identityFaceUV, pruneUVEdits, sanitizeUVEdits } from './model/uv'
+import { buildPrintCanvas, buildSheetCanvas } from './viewer/texture'
 import {
   dielineArtworkDataUrl,
   dielinePDF,
@@ -71,6 +73,14 @@ if (import.meta.env.DEV) {
     analyzeDielineImage,
     analyzeImageData,
     gableDimsFromAnalysis,
+    applyFaceUV,
+    faceUVAffine,
+    faceUVCentroid,
+    identityFaceUV,
+    pruneUVEdits,
+    sanitizeUVEdits,
+    buildPrintCanvas,
+    buildSheetCanvas,
   }
 }
 

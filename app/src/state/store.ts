@@ -9,6 +9,7 @@ import { defaultMaterial, type MaterialSettings } from '../model/material'
 import { nextExportName, projectNameFromFileName } from '../model/naming'
 import { templateSteps } from '../model/templates'
 import { identityTransform, type Transform, type Vec3 } from '../model/transform'
+import { pruneUVEdits, type UVEdits } from '../model/uv'
 import {
   applyOp,
   cloneEditable,
@@ -26,6 +27,12 @@ export type Playback = { mode: 'edit' } | { mode: 'scrub'; t: number; playing: b
 export type Theme = 'light' | 'dark'
 export type ViewLayout = 'single' | 'quad'
 export type EditorMode = '3d' | 'pattern'
+/**
+ * Which workspace fills the main area (top-menu Mode): folding (default),
+ * the UV editor (shift per-panel texture coords over the artwork), or the
+ * instruction-sheet preview.
+ */
+export type WorkspaceMode = 'fold' | 'uv' | 'instructions'
 /**
  * A reference image shown behind the dieline editor for tracing an imported
  * dieline into our format. Rect is in flat/doc coords: (x, y) = top-left corner
@@ -78,10 +85,13 @@ export interface AppState {
   theme: Theme
   viewLayout: ViewLayout
   editorMode: EditorMode
+  workspaceMode: WorkspaceMode
   /** Whole-object placement transform (translate + rotate + uniform scale). */
   transform: Transform
   /** Sheet look: base color / paper texture / design overlay (UV = dieline). */
   material: MaterialSettings
+  /** Per-face UV adjustments (UV mode); empty = UVs locked to the dieline. */
+  uvEdits: UVEdits
   /** Tracing reference behind the dieline editor (session-only). */
   backdrop: Backdrop | null
 
@@ -123,6 +133,9 @@ export interface AppState {
   setTheme: (theme: Theme) => void
   setViewLayout: (layout: ViewLayout) => void
   setEditorMode: (mode: EditorMode) => void
+  setWorkspaceMode: (mode: WorkspaceMode) => void
+  /** Replace the UV-edit map (identity entries are pruned automatically). */
+  setUVEdits: (edits: UVEdits) => void
   setTransform: (patch: Partial<Transform>) => void
   rotateObject: (axis: keyof Vec3, deltaDeg: number) => void
   resetTransform: () => void
@@ -191,8 +204,10 @@ export const useAppStore = create<AppState>((set, get) => {
     theme: readPref<Theme>('paperSim.theme', 'light', ['light', 'dark']),
     viewLayout: readPref<ViewLayout>('paperSim.layout', 'single', ['single', 'quad']),
     editorMode: '3d',
+    workspaceMode: 'fold',
     transform: identityTransform(),
     material: defaultMaterial(),
+    uvEdits: {},
     backdrop: null,
 
     dispatch: (op, opts) => {
@@ -428,6 +443,10 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setEditorMode: (mode) => set({ editorMode: mode }),
 
+    setWorkspaceMode: (mode) => set({ workspaceMode: mode }),
+
+    setUVEdits: (edits) => set({ uvEdits: pruneUVEdits(edits) }),
+
     setTransform: (patch) => {
       const s = get()
       set({ transform: { ...s.transform, ...patch } })
@@ -467,8 +486,10 @@ export const useAppStore = create<AppState>((set, get) => {
         projectName: defaultProjectName(template),
         transform: identityTransform(),
         material: defaultMaterial(),
+        uvEdits: {},
         backdrop: null,
         editorMode: '3d',
+        workspaceMode: 'fold',
       })
     },
 
@@ -482,6 +503,7 @@ export const useAppStore = create<AppState>((set, get) => {
         s.transform,
         s.projectName,
         s.material,
+        s.uvEdits,
       )
       const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
@@ -507,8 +529,10 @@ export const useAppStore = create<AppState>((set, get) => {
         projectName: loaded.projectName ?? projectNameFromFileName(fileName),
         transform: loaded.transform,
         material: loaded.material,
+        uvEdits: loaded.uvEdits,
         backdrop: null,
         editorMode: '3d',
+        workspaceMode: 'fold',
       })
     },
   }

@@ -9,7 +9,8 @@ import { nextExportName, slugify } from '../model/naming'
 import type { Step } from '../model/ops'
 import { getDisplayAngles, type AppState } from '../state/store'
 import { captureAvailable, capturePoses } from '../viewer/capture'
-import { buildSheetCanvas, loadImage } from '../viewer/texture'
+import type { UVEdits } from '../model/uv'
+import { buildPrintCanvas, loadImage } from '../viewer/texture'
 import { Pdf, type RGB } from './pdf'
 import { buildZip, dataUrlBytes, type ZipEntry } from './zip'
 
@@ -63,8 +64,9 @@ ${lines}
 export async function dielineTextureCanvas(
   doc: PaperDoc,
   material: MaterialSettings,
+  uvEdits?: UVEdits,
 ): Promise<HTMLCanvasElement> {
-  const canvas = await buildSheetCanvas(doc, material)
+  const canvas = await buildPrintCanvas(doc, material, uvEdits)
   const { min, max } = sheetBounds(doc)
   const w = Math.max(max.x - min.x, 0.001)
   const scale = canvas.width / w
@@ -92,14 +94,19 @@ export async function dielineTextureCanvas(
 export async function dielineArtworkDataUrl(
   doc: PaperDoc,
   material: MaterialSettings,
+  uvEdits?: UVEdits,
 ): Promise<string> {
-  const canvas = await buildSheetCanvas(doc, material)
+  const canvas = await buildPrintCanvas(doc, material, uvEdits)
   return canvas.toDataURL('image/png')
 }
 
 /** Composite the textured dieline to a PNG blob. */
-export async function dielineTexturePNG(doc: PaperDoc, material: MaterialSettings): Promise<Blob> {
-  const canvas = await dielineTextureCanvas(doc, material)
+export async function dielineTexturePNG(
+  doc: PaperDoc,
+  material: MaterialSettings,
+  uvEdits?: UVEdits,
+): Promise<Blob> {
+  const canvas = await dielineTextureCanvas(doc, material, uvEdits)
   return new Promise<Blob>((resolve, reject) =>
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png'),
   )
@@ -169,6 +176,7 @@ export async function dielinePDF(
   doc: PaperDoc,
   title: string,
   material?: MaterialSettings,
+  uvEdits?: UVEdits,
 ): Promise<Blob> {
   const { min, max } = sheetBounds(doc)
   const landscape = max.x - min.x > max.y - min.y
@@ -181,7 +189,7 @@ export async function dielinePDF(
   pdf.text(m, ph - m - 16, 9, PDF_LEGEND, { color: PDF_MUTED })
   if (material) {
     // dielineTextureCanvas already bakes the line work onto the art: fit it.
-    const art = canvasToJpeg(await dielineTextureCanvas(doc, material))
+    const art = canvasToJpeg(await dielineTextureCanvas(doc, material, uvEdits))
     const bw = pw - 2 * m
     const bh = ph - 2 * m - 34
     const scale = Math.min(bw / art.w, bh / art.h)
@@ -210,6 +218,7 @@ export async function dielinePDFTrueScale(
   doc: PaperDoc,
   title: string,
   material?: MaterialSettings,
+  uvEdits?: UVEdits,
 ): Promise<Blob> {
   const { min, max } = sheetBounds(doc)
   const padCm = 0.25 // breathing room so cut lines don't sit on the trim frame
@@ -231,7 +240,7 @@ export async function dielinePDFTrueScale(
   const pdf = new Pdf()
   let artIdx = -1
   if (material) {
-    const art = canvasToJpeg(await buildSheetCanvas(doc, material))
+    const art = canvasToJpeg(await buildPrintCanvas(doc, material, uvEdits))
     artIdx = pdf.addImage(art.bytes, art.w, art.h)
   }
   const pos = (id: number) => doc.vertices.find((v) => v.id === id)!.pos
@@ -445,6 +454,7 @@ export async function exportProjectBundle(s: AppState): Promise<string> {
     s.transform,
     s.projectName,
     s.material,
+    s.uvEdits,
   )
   const entries: ZipEntry[] = [
     { name: `${slug}/${slug}.fold`, data: JSON.stringify(fold, null, 2) },

@@ -6,6 +6,7 @@
 
 import type { Edge, Face, PaperDoc, Vertex } from './document'
 import { sanitizeMaterial, type MaterialSettings } from './material'
+import { hasUVEdits, sanitizeUVEdits, type UVEdits } from './uv'
 import type { HistoryData, Step } from './ops'
 import { replay } from './ops'
 import { identityTransform, sanitizeTransform, type Transform } from './transform'
@@ -39,6 +40,8 @@ export interface SaveFile {
   'paperSim:objectRotation'?: ObjectRotationData
   'paperSim:transform'?: Transform
   'paperSim:material'?: MaterialSettings
+  /** Per-face UV adjustments (UV mode); absent when all UVs sit on the dieline. */
+  'paperSim:uvEdits'?: UVEdits
 }
 
 export function toFoldFile(
@@ -49,6 +52,7 @@ export function toFoldFile(
   transform?: Transform,
   projectName?: string,
   material?: MaterialSettings,
+  uvEdits?: UVEdits,
 ): SaveFile {
   const vIndex = new Map<number, number>()
   doc.vertices.forEach((v, i) => vIndex.set(v.id, i))
@@ -87,6 +91,7 @@ export function toFoldFile(
     'paperSim:history': history,
     'paperSim:transform': transform,
     'paperSim:material': material,
+    'paperSim:uvEdits': hasUVEdits(uvEdits) ? uvEdits : undefined,
   }
 }
 
@@ -99,6 +104,7 @@ export interface LoadedFile {
   steps: Step[]
   transform: Transform
   material: MaterialSettings
+  uvEdits: UVEdits
   /** file_title if the file carries one; the loader falls back to the file name. */
   projectName?: string
 }
@@ -158,6 +164,7 @@ function fromPaperSimFile(f: SaveFile): LoadedFile {
     steps: state.steps,
     transform: sanitizeTransform(f['paperSim:transform'], f['paperSim:objectRotation']),
     material: sanitizeMaterial(f['paperSim:material']),
+    uvEdits: sanitizeUVEdits(f['paperSim:uvEdits']),
     projectName: f.file_title,
   }
 }
@@ -227,6 +234,7 @@ function fromForeignFold(f: Partial<SaveFile>): LoadedFile {
     steps: [],
     transform: identityTransform(),
     material: sanitizeMaterial(f['paperSim:material']),
+    uvEdits: sanitizeUVEdits(f['paperSim:uvEdits']),
     projectName: typeof f.file_title === 'string' && f.file_title ? f.file_title : undefined,
   }
 }

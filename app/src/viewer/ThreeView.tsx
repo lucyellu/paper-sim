@@ -21,6 +21,7 @@ import {
   selectedHinges,
   useAppStore,
 } from '../state/store'
+import { applyFaceUV, faceUVCentroid } from '../model/uv'
 import { registerCapture, type PoseAngles } from './capture'
 import { buildSheetCanvas, materialNeedsTexture } from './texture'
 
@@ -268,10 +269,17 @@ export function ThreeView() {
         geom.translate(0, 0, -PAPER_T / 2)
         // UVs = flat sheet coords normalized to the sheet bounds: the dieline
         // is the object's UV map, so overlay artwork lands where it's drawn.
+        // A UV-mode edit shifts this face's coords off the dieline (the print
+        // exports compensate with the same transform — see buildPrintCanvas).
+        const uvEdit = useAppStore.getState().uvEdits[face.id]
+        const uvC = uvEdit ? faceUVCentroid(doc, face) : null
         const pos = geom.attributes.position as THREE.BufferAttribute
         const uv = geom.attributes.uv as THREE.BufferAttribute
         for (let i = 0; i < uv.count; i++) {
-          uv.setXY(i, (pos.getX(i) - min.x) / bw, (pos.getY(i) - min.y) / bh)
+          let u = (pos.getX(i) - min.x) / bw
+          let v = (pos.getY(i) - min.y) / bh
+          if (uvEdit && uvC) [u, v] = applyFaceUV(uvEdit, uvC, u, v)
+          uv.setXY(i, u, v)
         }
         uv.needsUpdate = true
         const mat = new THREE.MeshStandardMaterial({ color: KRAFT, roughness: 0.92 })
@@ -370,15 +378,41 @@ export function ThreeView() {
       })
     }
 
+    /** Rewrite every face's UV attribute in place (live UV-mode edits). */
+    function refreshUVs() {
+      const s = useAppStore.getState()
+      const { min, max } = sheetBounds(s.doc)
+      const bw = Math.max(max.x - min.x, 0.001)
+      const bh = Math.max(max.y - min.y, 0.001)
+      for (const [fid, mesh] of faceMeshes) {
+        const face = s.doc.faces.find((f) => f.id === fid)
+        if (!face) continue
+        const uvEdit = s.uvEdits[fid]
+        const uvC = uvEdit ? faceUVCentroid(s.doc, face) : null
+        const geom = mesh.geometry as THREE.BufferGeometry
+        const pos = geom.attributes.position as THREE.BufferAttribute
+        const uv = geom.attributes.uv as THREE.BufferAttribute
+        for (let i = 0; i < uv.count; i++) {
+          let u = (pos.getX(i) - min.x) / bw
+          let v = (pos.getY(i) - min.y) / bh
+          if (uvEdit && uvC) [u, v] = applyFaceUV(uvEdit, uvC, u, v)
+          uv.setXY(i, u, v)
+        }
+        uv.needsUpdate = true
+      }
+    }
+
     buildModel(useAppStore.getState().doc, useAppStore.getState().tree)
     refreshSheetTexture()
 
     let currentDoc = useAppStore.getState().doc
     let currentMaterial = useAppStore.getState().material
+    let currentUVEdits = useAppStore.getState().uvEdits
     const unsub = useAppStore.subscribe((s) => {
       if (s.doc !== currentDoc) {
         currentDoc = s.doc
         currentMaterial = s.material
+        currentUVEdits = s.uvEdits
         // A live edge-ring reshape rebuilds the doc every move; keep the camera
         // put (buildModel would otherwise snap views back to their home).
         const cams = reshaping
@@ -404,6 +438,9 @@ export function ThreeView() {
       } else if (s.material !== currentMaterial) {
         currentMaterial = s.material
         refreshSheetTexture()
+      } else if (s.uvEdits !== currentUVEdits) {
+        currentUVEdits = s.uvEdits
+        refreshUVs()
       }
     })
 

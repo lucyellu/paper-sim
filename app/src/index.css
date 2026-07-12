@@ -149,6 +149,12 @@ body {
   background: var(--panel-border);
 }
 
+.menu-check {
+  display: inline-block;
+  width: 16px;
+  color: var(--accent, #e8930c);
+}
+
 .vb-mode {
   min-width: 34px;
   font-size: 11px;
@@ -961,6 +967,125 @@ button.step-num {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
 }
 
+/* ---- UV editor (UV mode) ---- */
+
+.uv-editor svg {
+  cursor: default;
+}
+
+.uv-editor .pe-inspector {
+  width: 248px;
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+}
+
+.uv-sel-label {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--hint);
+}
+
+.uv-art-head {
+  border-top: 1px solid var(--panel-border);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+/* ---- instructions mode ---- */
+
+.instructions-view {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: var(--bg);
+}
+
+.instructions-view .pe-toolbar {
+  z-index: 4;
+}
+
+.iv-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 64px 24px 48px;
+}
+
+.iv-body {
+  max-width: 58rem;
+  margin: 0 auto;
+}
+
+.iv-body h1 {
+  font-size: 1.4rem;
+  margin: 0 0 4px;
+  border-bottom: 2px solid var(--panel-border);
+  padding-bottom: 8px;
+}
+
+.iv-body h2 {
+  font-size: 1.05rem;
+  margin: 20px 0 6px;
+}
+
+.iv-legend {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+.iv-dieline svg {
+  width: 100%;
+  height: auto;
+  max-height: 46vh;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: #faf6ec;
+}
+
+.iv-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+
+.iv-step {
+  margin: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.iv-step img {
+  width: 100%;
+  display: block;
+}
+
+.iv-step figcaption {
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.iv-num {
+  display: inline-block;
+  min-width: 20px;
+  height: 20px;
+  line-height: 20px;
+  text-align: center;
+  background: #e8930c;
+  color: #fff;
+  border-radius: 50%;
+  font-weight: 700;
+  margin-right: 8px;
+}
+
+.iv-empty {
+  font-size: 13px;
+  color: var(--hint);
+}
+
 /* ---- transform (move / rotate / scale) numeric fields ---- */
 
 .xform-grid {
@@ -1029,6 +1154,22 @@ button.step-num {
   gap: 6px;
   font-size: 11px;
   color: var(--hint);
+}
+
+.tex-field span {
+  white-space: nowrap;
+}
+
+/* A hint used inside an inspector flows with the panel instead of floating. */
+.pe-inspector .pe-hint {
+  position: static;
+  transform: none;
+  max-width: none;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  pointer-events: auto;
 }
 
 .tex-field input {

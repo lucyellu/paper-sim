@@ -31,7 +31,7 @@ async function texturePng(s: AppState): Promise<Uint8Array | null> {
 
 export async function exportMesh(s: AppState, format: MeshFormat, pose: MeshPose): Promise<void> {
   const slug = slugify(s.projectName)
-  const mesh = bakeMesh(s.doc, s.tree, getDisplayAngles(s), pose)
+  const mesh = bakeMesh(s.doc, s.tree, getDisplayAngles(s), pose, s.uvEdits)
   const kind = poseKind(pose)
   const base = `${slug}_${kind}`
   const png = await texturePng(s)

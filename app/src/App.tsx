@@ -1,17 +1,20 @@
 import { useEffect } from 'react'
 import { useAppStore } from './state/store'
 import { DetailsPanel } from './ui/DetailsPanel'
+import { InstructionsView } from './ui/InstructionsView'
 import { PatternEditor } from './ui/PatternEditor'
 import { PatternInset } from './ui/PatternInset'
 import { Sidebar } from './ui/Sidebar'
 import { Timeline } from './ui/Timeline'
 import { TopBar } from './ui/TopBar'
+import { UVEditor } from './ui/UVEditor'
 import { ViewBar } from './ui/ViewBar'
 import { ThreeView } from './viewer/ThreeView'
 
 export default function App() {
   const theme = useAppStore((s) => s.theme)
   const editorMode = useAppStore((s) => s.editorMode)
+  const workspaceMode = useAppStore((s) => s.workspaceMode)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement
@@ -25,7 +28,9 @@ export default function App() {
         e.preventDefault()
         s.redo()
       } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        // Maya-style tool + select-mode hotkeys.
+        // Maya-style tool + select-mode hotkeys (fold workspace only — the UV
+        // editor uses arrows/Escape, instructions mode has no tools).
+        if (s.workspaceMode !== 'fold') return
         switch (e.key.toLowerCase()) {
           case 'q':
             s.setTransformTool('select')
@@ -62,10 +67,12 @@ export default function App() {
         <Sidebar />
         <div className="main">
           <ThreeView />
-          {editorMode === 'pattern' && <PatternEditor />}
-          <ViewBar />
-          {editorMode === '3d' && <PatternInset />}
-          <Timeline />
+          {workspaceMode === 'fold' && editorMode === 'pattern' && <PatternEditor />}
+          {workspaceMode === 'uv' && <UVEditor />}
+          {workspaceMode === 'instructions' && <InstructionsView />}
+          {workspaceMode === 'fold' && <ViewBar />}
+          {workspaceMode === 'fold' && editorMode === '3d' && <PatternInset />}
+          {workspaceMode === 'fold' && <Timeline />}
         </div>
         <DetailsPanel />
       </div>

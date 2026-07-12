@@ -29,6 +29,8 @@ interface MenuItemDef {
   disabled?: boolean
   separator?: boolean
   title?: string
+  /** Radio-style check mark (used by the Mode menu). */
+  checked?: boolean
 }
 
 /** A single top-bar dropdown menu. */
@@ -66,6 +68,9 @@ function Menu({
                   it.onClick?.()
                 }}
               >
+                {it.checked !== undefined && (
+                  <span className="menu-check">{it.checked ? '✓' : ''}</span>
+                )}
                 {it.label}
               </button>
             ),
@@ -189,6 +194,28 @@ export function TopBar() {
     },
   ]
 
+  const modeItems: MenuItemDef[] = [
+    {
+      label: 'Fold mode',
+      checked: s.workspaceMode === 'fold',
+      title: 'Fold the model, edit the dieline, record steps (the default workspace)',
+      onClick: () => s.setWorkspaceMode('fold'),
+    },
+    {
+      label: 'UV mode',
+      checked: s.workspaceMode === 'uv',
+      title:
+        'Select panel UV islands and shift / rotate / scale them over the artwork — prints are warped to match, so the printout still equals the 3D preview',
+      onClick: () => s.setWorkspaceMode('uv'),
+    },
+    {
+      label: 'Instructions mode',
+      checked: s.workspaceMode === 'instructions',
+      title: 'Preview the step-by-step instruction sheet (print it or export a PDF)',
+      onClick: () => s.setWorkspaceMode('instructions'),
+    },
+  ]
+
   const hasArt = materialNeedsTexture(s.material)
 
   const exportItems: MenuItemDef[] = [
@@ -210,14 +237,14 @@ export function TopBar() {
         ? 'Flat pattern with the printed design + cut/crease lines'
         : 'Add a design in the dieline editor (Texture tool) to include artwork',
       onClick: () =>
-        dielineTexturePNG(s.doc, s.material)
+        dielineTexturePNG(s.doc, s.material, s.uvEdits)
           .then((png) => downloadBlob(png, nextExportName(s.projectName, 'dieline_art', 'png')))
           .catch((e) => alert(`PNG export failed: ${e}`)),
     },
     {
       label: 'Dieline SVG — with artwork',
       onClick: () =>
-        dielineArtworkDataUrl(s.doc, s.material)
+        dielineArtworkDataUrl(s.doc, s.material, s.uvEdits)
           .then((url) =>
             downloadText(
               dielineSVG(s.doc, url),
@@ -230,7 +257,7 @@ export function TopBar() {
     {
       label: 'Dieline PDF — with artwork',
       onClick: () =>
-        dielinePDF(s.doc, s.projectName, s.material)
+        dielinePDF(s.doc, s.projectName, s.material, s.uvEdits)
           .then((pdf) => downloadBlob(pdf, nextExportName(s.projectName, 'dieline_art', 'pdf')))
           .catch((e) => alert(`PDF export failed: ${e}`)),
     },
@@ -248,7 +275,7 @@ export function TopBar() {
         ? 'Exact physical size with the printed design — print at 100%, cut, fold'
         : 'Add a design in the dieline editor (Texture tool) to include artwork',
       onClick: () =>
-        dielinePDFTrueScale(s.doc, s.projectName, s.material)
+        dielinePDFTrueScale(s.doc, s.projectName, s.material, s.uvEdits)
           .then((pdf) => downloadBlob(pdf, nextExportName(s.projectName, 'dieline_art_1to1', 'pdf')))
           .catch((e) => alert(`PDF export failed: ${e}`)),
     },
@@ -284,6 +311,7 @@ export function TopBar() {
   const menus: Array<[string, MenuItemDef[]]> = [
     ['File', fileItems],
     ['Edit', editItems],
+    ['Mode', modeItems],
     ['Export', exportItems],
   ]
 

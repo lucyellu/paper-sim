@@ -5,14 +5,14 @@
 
 **Status:** v0 + v0.5 + v1 slices complete and verified — app in `app/`, run with `cd app && npm run dev`
 **Repo:** https://github.com/lucyellu/paper-sim (branch `main`)
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-12
 
 ## Picking up in a new session
 
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs`
    Product direction lives in `VISION.md` (pillars, product ladder, what's parked).
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
@@ -56,6 +56,7 @@ and image/text→crease-pattern generation are future phases.
 | 2026-07-10 | **Lucky star is a stress test, not a v0 target** | Strip curving/knotting and the final "puff" are non-rigid. Approximations exist (micro-crease fans for bends; inflate morph for puff) — revisit in v1+. v0 targets: box/carton, simple traditional folds. |
 | 2026-07-10 | **Art direction: cozy hand-crafted paper look** | Per `reference/GUI/` — warm palette, paper textures, craft-book feel. |
 | 2026-07-11 | **No freeform UV/mesh-UV editor — UVs stay locked to dieline flat coords** | The 3D view must be a truthful mockup of the printed object; a UV editor whose only power is making the preview diverge from the print is an anti-feature. Artwork control lives in the dieline-space Texture tool (`overlayTransform`), which changes print + 3D together. Two-sided (inside/outside) material is the legit future gap. |
+| 2026-07-12 | **UV editing allowed, but print exports warp to compensate (amends the 2026-07-11 no-UV-editor rule)** | User asked to shift UVs so artwork lines up with panels. Fidelity is preserved by construction: a per-face `FaceUV` (translate/rotate/scale about the face's UV centroid) moves the face's texture coords in 3D, and every artwork print path runs `buildPrintCanvas`, which inverse-warps the artwork back into the face's dieline position (affine, clipped per face) — preview and printout cannot diverge. UV mode lives in the new top-menu **Mode** (Fold / UV / Instructions). Translate is the workhorse; rotate/scale exist but are rare. UV edits are NOT history ops (same as material/transform). |
 | 2026-07-11 | **1 dieline unit = 1 cm (physical scale)** | Print-and-fold is the product promise; exports need real dimensions. True-scale PDF export prints at 100% with a 5 cm calibration bar; tiles across A4 pages when bigger. |
 | 2026-07-11 | **Edge-ring reshape translates the whole region beyond the ring** | Moving only the ring's own vertices sheared the panels past it (gable top squashed → derived targets invalid → "exploding carton"). `ringRegionVertexIds` moves every vertex at-or-beyond the ring line along the axis, so the cap keeps its exact shape and folds stay valid; only the band behind the ring stretches. |
 | 2026-07-11 | **US Letter (8.5×11) is the default paper, not A4** | The audience prints at home in the US; an A4 PDF at 100% clips ~5 cm on Letter. All PDF exports are Letter; A4 becomes a setting later. |
@@ -203,6 +204,10 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
       juice-box preset, plus a 12 oz can-sleeve preset on the can builder; one-step
       "Wrap the sleeve" fold — 2026-07-11
 - [x] US Letter page size for all PDF exports (true-scale, fit-preview, instructions) — 2026-07-11
+- [x] Mode menu (Fold / UV / Instructions) + UV editor: per-face UV islands over the artwork,
+      drag/rotate/scale with print-warp compensation (`model/uv.ts`, `ui/UVEditor.tsx`,
+      `buildPrintCanvas`); Instructions mode = in-app sheet preview (`ui/InstructionsView.tsx`) —
+      2026-07-12
 - [ ] Per-hinge angle limits (basic constraints)
 - [ ] Animation export (GIF/MP4)
 - [ ] Starter model library from `reference/` (gift box, cup, boat, peacock…)
@@ -257,6 +262,50 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 ## Progress log
 
 *(newest first)*
+
+- **2026-07-12** — **Mode menu + UV editor round** (user: "we wanted to avoid editing UV maps to
+  keep dieline→printout fidelity, but at least allow *shifting* UVs so art lines up — add a top-menu
+  **Mode** with fold / UV / instructions; UV mode = dieline-style view, select UVs, translate
+  (mostly), rotate, maybe scale").
+  - **Data model** (`model/uv.ts`): per-face `FaceUV { du, dv, rotationDeg, scaleU, scaleV }`
+    applied about the face's base-UV centroid (`uv' = R·S·(uv−c) + c + d`; offsets are sheet
+    fractions, rotation clockwise-on-screen to match the Texture tool). `uvEdits` map in the store,
+    identity entries auto-pruned; persisted as `paperSim:uvEdits` (omitted when empty); NOT a
+    history op (same policy as material/transform). Affine helpers (compose/invert) shared by all
+    consumers.
+  - **Fidelity preserved by construction**: `buildPrintCanvas` (viewer/texture.ts) inverse-warps
+    the artwork per edited face — clip the face polygon in dieline px, `setTransform(F·T⁻¹·F⁻¹)`,
+    redraw; out-of-artwork samples fall back to the base paper color. ALL artwork print paths now
+    run through it (dieline PNG/SVG/PDF with artwork, true-scale 1:1 PDF), so shifting UVs never
+    makes the printout diverge from the 3D preview. 3D (`ThreeView` UV attributes, live-refreshed
+    on `uvEdits` change) and mesh exports (`bakeMesh` → OBJ/GLB/FBX) apply the same transform to
+    UVs while keeping the base sheet texture.
+  - **Mode menu** (TopBar): Fold mode (default workspace), UV mode, Instructions mode, with a
+    check mark on the active one (`store.workspaceMode`). Fold-mode-only chrome (ViewBar, inset,
+    timeline, pattern editor, QWER/123 hotkeys) hides in the other modes; ThreeView stays mounted
+    underneath so capture keeps working.
+  - **UV editor** (`ui/UVEditor.tsx`): artwork as fixed background, faint dieline reference, one
+    selectable UV island per panel (selection = face selection, so the 3D view highlights too).
+    Drag to translate (the workhorse), Ctrl+click multi-select, arrows nudge (Shift = coarse),
+    numeric Offset U/V / Rotate / Scale U/V, group ⟲90/⟳90 + ±10% buttons, Reset selected /
+    Reset all, Fit, wheel-zoom + right-drag pan. **Group semantics** (user feedback, same day):
+    with several panels selected, the numeric fields apply the delta/factor relative to the
+    primary panel about the SELECTION center — typing Scale 0.6 shrinks the whole selection as
+    one piece (first cut scaled each island toward its own centroid, which read as "scales down
+    separately"). Single selection = absolute per-face set. An **Artwork** section in the same
+    inspector edits `overlayTransform` (offset/scale/rotate the design image itself + Fit),
+    so both "move the UVs" and "move the art" live in UV mode.
+  - **Instructions mode** (`ui/InstructionsView.tsx`): in-app instruction-sheet preview — dieline
+    SVG + legend + one numbered snapshot card per step (offscreen captures from the live viewer),
+    with Print-view and PDF buttons; friendly empty state when there are no steps.
+  - **Verify**: new `scripts/verify-v10.mjs` (FaceUV math incl. clockwise 90° check, print-warp
+    pixel assertions red→blue after du=0.5 + base-color fallback, bakeMesh UV shift, store prune +
+    `paperSim:uvEdits` save/load round-trip + field omitted when clean, and real-UI checks: Mode
+    menu switching, island drag updates `uvEdits` + selection, instruction cards = steps + 1).
+    Whole suite verify…v10 green, zero page errors; visual smoke shots in `scripts/shots/v10-*`.
+  - **Scope notes**: UV islands move rigidly per face (no per-vertex UV editing); UV edits skip
+    undo history; the pattern editor's overlay reference still shows the base (unwarped) artwork —
+    the UV editor itself is the truthful view for shifted panels.
 
 - **2026-07-11 (evening)** — **Sleeves + Letter + vision round** (user shared the product vision:
   CAH-style free-designs/paid-materials, sleeves as expression like phone cases, education angle,

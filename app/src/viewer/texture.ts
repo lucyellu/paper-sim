@@ -4,8 +4,16 @@
 // flat sheet bounds — face UVs are the flat coordinates normalized to those
 // bounds, so the dieline acts as the UV map of the folded object.
 
-import { sheetBounds, type PaperDoc } from '../model/document'
+import { sheetBounds, vertexById, type PaperDoc } from '../model/document'
 import type { MaterialSettings } from '../model/material'
+import {
+  composeAffine,
+  faceUVAffine,
+  faceUVCentroid,
+  invertAffine,
+  isIdentityFaceUV,
+  type UVEdits,
+} from '../model/uv'
 
 const MAX_TEX = 2048
 
@@ -65,6 +73,66 @@ export async function buildSheetCanvas(
     }
   }
   return canvas
+}
+
+/**
+ * The sheet artwork as it must be PRINTED: buildSheetCanvas plus per-face UV
+ * compensation. A face whose UVs were shifted samples a different part of the
+ * artwork in 3D; here that same artwork region is pulled back into the face's
+ * dieline position (inverse affine warp, clipped to the face polygon), so a
+ * printed-and-folded sheet matches the 3D preview exactly. With no UV edits
+ * this returns buildSheetCanvas unchanged.
+ */
+export async function buildPrintCanvas(
+  doc: PaperDoc,
+  material: MaterialSettings,
+  uvEdits?: UVEdits,
+): Promise<HTMLCanvasElement> {
+  const base = await buildSheetCanvas(doc, material)
+  const edited = doc.faces.filter((f) => {
+    const t = uvEdits?.[f.id]
+    return t && !isIdentityFaceUV(t)
+  })
+  if (edited.length === 0) return base
+
+  const out = document.createElement('canvas')
+  out.width = base.width
+  out.height = base.height
+  const ctx = out.getContext('2d')!
+  ctx.drawImage(base, 0, 0)
+
+  const { min, max } = sheetBounds(doc)
+  const w = Math.max(max.x - min.x, 0.001)
+  const h = Math.max(max.y - min.y, 0.001)
+  // UV space (v up) -> canvas px (y down): x = u·W, y = (1 − v)·H.
+  const F = { a: out.width, b: 0, c: 0, d: -out.height, e: 0, f: out.height }
+  const Finv = invertAffine(F)
+
+  for (const face of edited) {
+    const t = uvEdits![face.id]
+    const c = faceUVCentroid(doc, face)
+    // Printed pixel q must show base(F·T·F⁻¹(q)); drawImage with transform M
+    // shows base(M⁻¹·q), so M = F·T⁻¹·F⁻¹.
+    const M = composeAffine(F, composeAffine(invertAffine(faceUVAffine(t, c)), Finv))
+    ctx.save()
+    ctx.beginPath()
+    face.vertexIds.forEach((vid, i) => {
+      const p = vertexById(doc, vid).pos
+      const x = ((p.x - min.x) / w) * out.width
+      const y = (1 - (p.y - min.y) / h) * out.height
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    })
+    ctx.closePath()
+    ctx.clip()
+    // Where the warp samples outside the artwork, print the base paper color.
+    ctx.fillStyle = material.baseColor
+    ctx.fill()
+    ctx.setTransform(M.a, M.b, M.c, M.d, M.e, M.f)
+    ctx.drawImage(base, 0, 0)
+    ctx.restore()
+  }
+  return out
 }
 
 function tileOnto(

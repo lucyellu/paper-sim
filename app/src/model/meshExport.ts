@@ -9,6 +9,7 @@
 import * as THREE from 'three'
 import { sheetBounds, vertexById, type PaperDoc, type PanelTree } from './document'
 import { computeFaceMatrices, degToRad } from './fold'
+import { applyFaceUV, faceUVCentroid, type UVEdits } from './uv'
 
 export type MeshPose = 'folded' | 'flat'
 
@@ -50,6 +51,7 @@ export function bakeMesh(
   tree: PanelTree,
   angles: Record<number, number>,
   pose: MeshPose,
+  uvEdits?: UVEdits,
 ): BakedMesh {
   const poseAngles = pose === 'flat' ? {} : angles
   const matrices = computeFaceMatrices(doc, tree, radAngles(poseAngles))
@@ -66,6 +68,8 @@ export function bakeMesh(
     const m = matrices.get(face.id)
     if (!m) continue
     const mat = new THREE.Matrix4().multiplyMatrices(sheetToWorld, m)
+    const uvEdit = uvEdits?.[face.id]
+    const uvC = uvEdit ? faceUVCentroid(doc, face) : null
     const pts: THREE.Vector3[] = []
     const uv: Array<[number, number]> = []
     for (const vid of face.vertexIds) {
@@ -73,7 +77,9 @@ export function bakeMesh(
       const p = new THREE.Vector3(v.pos.x, v.pos.y, 0).applyMatrix4(mat)
       pts.push(p)
       bb.expandByPoint(p)
-      uv.push([(v.pos.x - min.x) / bw, (v.pos.y - min.y) / bh])
+      const u0 = (v.pos.x - min.x) / bw
+      const v0 = (v.pos.y - min.y) / bh
+      uv.push(uvEdit && uvC ? applyFaceUV(uvEdit, uvC, u0, v0) : [u0, v0])
     }
     faces.push({ pts, uv })
   }

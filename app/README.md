@@ -40,6 +40,18 @@ starts the dev server if it isn't running and opens the app in the browser.
   own texture image, tiled) plus a **design overlay** stretched over the dieline — the flat
   pattern is the object's UV map, exactly like a product mockup. The overlay is shown in the
   dieline editor so you can line art up with panels. Saved inside the `.fold` file.
+- **Mode** (top menu) switches the workspace: **Fold mode** (default — everything below),
+  **UV mode**, and **Instructions mode**. UV mode is a Blender-style UV editor: the artwork is the
+  fixed background, each panel's **UV island** sits on top — drag an island to choose which part
+  of the artwork that panel shows (Ctrl+click multi-select, arrow keys nudge, numeric
+  offset/rotate/scale in the inspector; translate is the workhorse). With several panels
+  selected, fields and buttons act on the selection **as one piece** about its center. The
+  inspector's **Artwork** section moves/scales the design image itself (same as the Texture
+  tool). Islands default to the dieline exactly; **print exports warp the artwork back per
+  panel**, so the printout always matches the 3D preview. UV edits are saved in the `.fold`
+  file (`paperSim:uvEdits`).
+  Instructions mode previews the instruction sheet in-app (dieline + numbered step snapshots)
+  with Print / PDF buttons.
 - **✎ (top right)** opens the **dieline editor**: draw creases/cuts (endpoints snap to points and
   lines; drawing across a panel splits it), delete lines between panels (merges them), click a
   line to retype it (cut ↔ crease) or set its target angle, drag points to move them. All edits
@@ -83,6 +95,10 @@ node scripts/check-exports.mjs # numbered export names, PDFs, project bundle zip
 node scripts/verify-v4.mjs     # template steps, row/column/object selection, materials, panels
 node scripts/verify-v5.mjs     # transform round-trip, edge-ring select + reshape, OBJ/FBX bytes
 node scripts/verify-v6.mjs     # can + rectangular-gable geometry, textured export, edge handle
+node scripts/verify-v7.mjs     # edge-ring region reshape, true-scale 1:1 PDF export
+node scripts/verify-v8.mjs     # image → dieline analyzer + import wizard
+node scripts/verify-v9.mjs     # sleeve templates, can-sleeve clearance, US Letter pages
+node scripts/verify-v10.mjs    # Mode menu, UV editor (drag/select), print warp, uv save/load
 node scripts/shoot-v3.mjs      # visual pass: carton fold sequence + editor screenshots
 ```
 
