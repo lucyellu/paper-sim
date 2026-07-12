@@ -14,7 +14,8 @@ starts the dev server if it isn't running and opens the app in the browser.
 
 ## Use
 
-- **File → New** — starter dielines: tuck box, milk carton (square or **tall/rect** gable), and a
+- **File → New** — starter dielines: tuck box, milk carton (**1 L tall/slim** or **250 mL squat**
+  gable — both real Pure-Pak/Elopak carton sizes; units are cm), and a
   **can label** (faceted cylinder — the label rectangle wraps into a tube via a fan of creases).
   The milk carton is a gable-top with spout gusset creases; every crease carries the target angle
   that seals it. Templates come with their fold steps recorded — press **play** to watch them fold.
@@ -41,22 +42,27 @@ starts the dev server if it isn't running and opens the app in the browser.
   pattern is the object's UV map, exactly like a product mockup. The overlay is shown in the
   dieline editor so you can line art up with panels. Saved inside the `.fold` file.
 - **Mode** (top menu) switches the workspace: **Fold mode** (default — everything below),
-  **UV mode**, and **Instructions mode**. UV mode is a Blender-style UV editor: the artwork is the
-  fixed background, each panel's **UV island** sits on top — drag an island, or use the in-scene
-  **gizmo** (center square = move, red/green arrows = axis move, ring = rotate with Shift = 15°
-  snap, corner square = uniform scale) to choose which part of the artwork that panel shows.
-  Ctrl+click multi-selects, arrows nudge, and the inspector has numeric offset/rotate/scale.
-  With several panels selected, everything acts on the selection **as one piece** about its
-  center. The **⛭ Geometry** toggle flips what gets edited: drags and the gizmo then move the
-  selected panels' **dieline vertices** — the object reshapes to match the artwork (shared edges
-  pull their neighbours), instead of stretching art that carries text. The **Artwork** section
-  moves/scales the design image itself, with **Auto-fit** (detects the image's content box and
-  trims background margins) and **Fill sheet**. Every finished gesture is one undoable history
-  op (Ctrl+Z). Islands default to the dieline exactly; **print exports warp the artwork back per
-  panel**, so the printout always matches the 3D preview. UV edits are saved in the `.fold`
-  file (`paperSim:uvEdits`).
+  **Flat mode**, and **Instructions mode**. Flat mode works on the flat sheet with three tools
+  (segmented switch, top-left):
+  - **🖼 Artwork** (default) — move / rotate / scale the printed **design** so it lines up with
+    the dieline, the common task. Drag the image in the scene, use the in-scene **gizmo**
+    (center = move, red/green arrows = axis move, ring = rotate with Shift = 15° snap, corner =
+    uniform scale), arrow-nudge, or type values. **Auto-fit** detects the image's content box
+    (trims background margins); **Fill sheet** stretches it edge to edge. Edits the print and the
+    3D preview together.
+  - **⛭ Geometry** — reshape the dieline **itself** to trace the artwork (like drawing a 3D
+    object over a reference). Click panels to select, then drag them or the gizmo to move / rotate
+    / scale their vertices; shared edges pull their neighbours. Changes the object in every mode.
+  - **▦ UVs** (advanced) — shift individual panel **UV islands** over the artwork. Ctrl+click
+    multi-selects; with several panels selected, fields and gizmo act on the selection **as one
+    piece** about its center. Islands default to the dieline exactly; **print exports warp the
+    artwork back per panel**, so the printout always matches the 3D preview.
+
+  Every finished gesture is one undoable history op (Ctrl+Z). UV edits are saved in the `.fold`
+  file (`paperSim:uvEdits`); the design placement is saved in the material.
   Instructions mode previews the instruction sheet in-app (dieline + numbered step snapshots)
-  with Print / PDF buttons.
+  with Print / PDF buttons — and the dieline, instructions, and project-bundle exports always
+  composite the printed artwork under the line work when the project has a design.
 - **✎ (top right)** opens the **dieline editor**: draw creases/cuts (endpoints snap to points and
   lines; drawing across a panel splits it), delete lines between panels (merges them), click a
   line to retype it (cut ↔ crease) or set its target angle, drag points to move them. All edits
@@ -103,7 +109,8 @@ node scripts/verify-v6.mjs     # can + rectangular-gable geometry, textured expo
 node scripts/verify-v7.mjs     # edge-ring region reshape, true-scale 1:1 PDF export
 node scripts/verify-v8.mjs     # image → dieline analyzer + import wizard
 node scripts/verify-v9.mjs     # sleeve templates, can-sleeve clearance, US Letter pages
-node scripts/verify-v10.mjs    # Mode menu, UV editor (drag/select), print warp, uv save/load
+node scripts/verify-v10.mjs    # Mode menu, Flat editor (Artwork/Geometry/UVs tools), print warp
+node scripts/verify-v11.mjs    # scale-gizmo (rotated) fix, carton sizes, instructions artwork, z-offsets
 node scripts/shoot-v3.mjs      # visual pass: carton fold sequence + editor screenshots
 ```
 

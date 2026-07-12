@@ -3,15 +3,23 @@
 // printable page or download the PDF. Snapshots come from the live viewer via
 // viewer/capture, so the sheet always reflects the current model + material.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { nextExportName } from '../model/naming'
 import { useAppStore } from '../state/store'
 import { captureAvailable, capturePoses } from '../viewer/capture'
-import { dielineSVG, downloadBlob, instructionsPDF, openInstructionSheet } from './exports'
+import { materialNeedsTexture } from '../viewer/texture'
+import {
+  dielineArtworkDataUrl,
+  dielineSVG,
+  downloadBlob,
+  instructionsPDF,
+  openInstructionSheet,
+} from './exports'
 
 export function InstructionsView() {
   const s = useAppStore()
   const [shots, setShots] = useState<string[]>([])
+  const [artUrl, setArtUrl] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     if (s.steps.length === 0 || !captureAvailable()) {
@@ -27,7 +35,22 @@ export function InstructionsView() {
     }
   }, [s.doc, s.steps, s.material, s.uvEdits])
 
-  const svg = useMemo(() => dielineSVG(s.doc), [s.doc])
+  // The dieline preview carries the printed design when the project has one.
+  useEffect(() => {
+    if (!materialNeedsTexture(s.material)) {
+      setArtUrl(undefined)
+      return
+    }
+    let stale = false
+    void dielineArtworkDataUrl(s.doc, s.material, s.uvEdits).then((url) => {
+      if (!stale) setArtUrl(url)
+    })
+    return () => {
+      stale = true
+    }
+  }, [s.doc, s.material, s.uvEdits])
+
+  const svg = dielineSVG(s.doc, artUrl)
 
   return (
     <div className="instructions-view">
@@ -35,7 +58,9 @@ export function InstructionsView() {
         <span className="pe-title">Instructions</span>
         <button
           disabled={s.steps.length === 0}
-          onClick={() => openInstructionSheet(s.doc, s.steps, s.projectName)}
+          onClick={() =>
+            void openInstructionSheet(s.doc, s.steps, s.projectName, s.material, s.uvEdits)
+          }
           title="Open the printable instruction sheet in a new tab"
         >
           🖨 Print view
@@ -43,7 +68,7 @@ export function InstructionsView() {
         <button
           disabled={s.steps.length === 0}
           onClick={() =>
-            instructionsPDF(s.doc, s.steps, s.projectName)
+            instructionsPDF(s.doc, s.steps, s.projectName, s.material, s.uvEdits)
               .then((pdf) => {
                 if (pdf) downloadBlob(pdf, nextExportName(s.projectName, 'instructions', 'pdf'))
               })

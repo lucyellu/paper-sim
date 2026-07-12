@@ -37,7 +37,7 @@ export type EditorMode = '3d' | 'pattern'
  * the UV editor (shift per-panel texture coords over the artwork), or the
  * instruction-sheet preview.
  */
-export type WorkspaceMode = 'fold' | 'uv' | 'instructions'
+export type WorkspaceMode = 'fold' | 'flat' | 'instructions'
 /**
  * A reference image shown behind the dieline editor for tracing an imported
  * dieline into our format. Rect is in flat/doc coords: (x, y) = top-left corner
@@ -151,7 +151,7 @@ export interface AppState {
    */
   commitUVEdits: (prev: UVEdits, label: string, coalesce?: boolean) => void
   /** Record one undoable artwork-placement op (prev = before the gesture). */
-  commitOverlay: (prev: OverlayTransform | undefined, label: string) => void
+  commitOverlay: (prev: OverlayTransform | undefined, label: string, coalesce?: boolean) => void
   setTransform: (patch: Partial<Transform>) => void
   rotateObject: (axis: keyof Vec3, deltaDeg: number) => void
   resetTransform: () => void
@@ -511,11 +511,19 @@ export const useAppStore = create<AppState>((set, get) => {
       s.dispatch({ type: 'setUVs', label, prev: before, next: s.uvEdits }, { alreadyApplied: true })
     },
 
-    commitOverlay: (prev, label) => {
+    commitOverlay: (prev, label, coalesce) => {
       const s = get()
       const before = prev ?? identityOverlayTransform()
       const next = s.material.overlayTransform ?? identityOverlayTransform()
       if (JSON.stringify(before) === JSON.stringify(next)) return
+      const log = s.history.log
+      const top = s.history.cursor === log.length ? log[log.length - 1] : undefined
+      if (coalesce && top && top.type === 'setOverlay' && top.label === label) {
+        set({
+          history: { ...s.history, log: [...log.slice(0, -1), { ...top, next }] },
+        })
+        return
+      }
       s.dispatch({ type: 'setOverlay', label, prev: before, next }, { alreadyApplied: true })
     },
 

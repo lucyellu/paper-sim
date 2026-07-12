@@ -10,7 +10,7 @@ import type { Step } from '../model/ops'
 import { getDisplayAngles, type AppState } from '../state/store'
 import { captureAvailable, capturePoses } from '../viewer/capture'
 import type { UVEdits } from '../model/uv'
-import { buildPrintCanvas, loadImage } from '../viewer/texture'
+import { buildPrintCanvas, loadImage, materialNeedsTexture } from '../viewer/texture'
 import { Pdf, type RGB } from './pdf'
 import { buildZip, dataUrlBytes, type ZipEntry } from './zip'
 
@@ -328,6 +328,8 @@ export async function instructionsPDF(
   doc: PaperDoc,
   steps: Step[],
   title: string,
+  material?: MaterialSettings,
+  uvEdits?: UVEdits,
 ): Promise<Blob | null> {
   if (steps.length === 0) return null
   const poses = [{}, ...steps.map((st) => st.angles)]
@@ -341,7 +343,21 @@ export async function instructionsPDF(
   pdf.text(m, ph - m, 18, `${title} — folding instructions`, { bold: true, color: PDF_INK })
   pdf.text(m, ph - m - 16, 9, PDF_LEGEND, { color: PDF_MUTED })
   pdf.text(m, ph - m - 44, 12, 'Dieline', { bold: true, color: PDF_INK })
-  drawDielineInto(pdf, doc, m, m, pw - 2 * m, ph - 2 * m - 62)
+  const dieX = m
+  const dieY = m
+  const dieW = pw - 2 * m
+  const dieH = ph - 2 * m - 62
+  if (material && materialNeedsTexture(material)) {
+    // Same as the artwork dieline PDF: fit the textured (design + line work)
+    // dieline into the block so instructions carry the printed design.
+    const art = canvasToJpeg(await dielineTextureCanvas(doc, material, uvEdits))
+    const scale = Math.min(dieW / art.w, dieH / art.h)
+    const iw = art.w * scale
+    const ih = art.h * scale
+    pdf.imageJpeg(art.bytes, art.w, art.h, dieX + (dieW - iw) / 2, dieY + (dieH - ih) / 2, iw, ih)
+  } else {
+    drawDielineInto(pdf, doc, dieX, dieY, dieW, dieH)
+  }
 
   const cols = 2
   const rows = 3
@@ -374,11 +390,12 @@ export function buildInstructionSheetHTML(
   doc: PaperDoc,
   steps: Step[],
   title: string,
+  artwork?: string,
 ): string | null {
   if (steps.length === 0) return null
   const poses = [{}, ...steps.map((st) => st.angles)]
   const images = capturePoses(poses)
-  const svg = dielineSVG(doc)
+  const svg = dielineSVG(doc, artwork)
 
   const cards = images
     .map((url, i) => {
@@ -427,8 +444,19 @@ ${cards}
  * Render the instruction sheet as a printable page opened in a new tab (print
  * to PDF from there). Returns false if there are no steps to export.
  */
-export function openInstructionSheet(doc: PaperDoc, steps: Step[], title: string): boolean {
-  const html = buildInstructionSheetHTML(doc, steps, title)
+export async function openInstructionSheet(
+  doc: PaperDoc,
+  steps: Step[],
+  title: string,
+  material?: MaterialSettings,
+  uvEdits?: UVEdits,
+): Promise<boolean> {
+  if (steps.length === 0) return false
+  const artwork =
+    material && materialNeedsTexture(material)
+      ? await dielineArtworkDataUrl(doc, material, uvEdits)
+      : undefined
+  const html = buildInstructionSheetHTML(doc, steps, title, artwork)
   if (html === null) return false
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
   window.open(url, '_blank')
@@ -456,20 +484,34 @@ export async function exportProjectBundle(s: AppState): Promise<string> {
     s.material,
     s.uvEdits,
   )
+  // Whenever the project has a printed design, the bundle's dieline files carry
+  // it (SVG/PDF/instructions all composite the artwork under the line work).
+  const hasArt = materialNeedsTexture(s.material)
+  const artUrl = hasArt ? await dielineArtworkDataUrl(s.doc, s.material, s.uvEdits) : undefined
   const entries: ZipEntry[] = [
     { name: `${slug}/${slug}.fold`, data: JSON.stringify(fold, null, 2) },
-    { name: `${slug}/${slug}_dieline.svg`, data: dielineSVG(s.doc) },
+    { name: `${slug}/${slug}_dieline.svg`, data: dielineSVG(s.doc, artUrl) },
     {
       name: `${slug}/${slug}_dieline.pdf`,
-      data: new Uint8Array(await (await dielinePDF(s.doc, s.projectName)).arrayBuffer()),
+      data: new Uint8Array(
+        await (
+          await dielinePDF(s.doc, s.projectName, hasArt ? s.material : undefined, s.uvEdits)
+        ).arrayBuffer(),
+      ),
     },
   ]
   if (captureAvailable()) {
     const png = capturePoses([getDisplayAngles(s)], { w: 1200, h: 900 })[0]
     entries.push({ name: `${slug}/${slug}_model.png`, data: dataUrlBytes(png) })
-    const sheet = buildInstructionSheetHTML(s.doc, s.steps, s.projectName)
+    const sheet = buildInstructionSheetHTML(s.doc, s.steps, s.projectName, artUrl)
     if (sheet) entries.push({ name: `${slug}/${slug}_instructions.html`, data: sheet })
-    const pdf = await instructionsPDF(s.doc, s.steps, s.projectName)
+    const pdf = await instructionsPDF(
+      s.doc,
+      s.steps,
+      s.projectName,
+      hasArt ? s.material : undefined,
+      s.uvEdits,
+    )
     if (pdf) {
       entries.push({
         name: `${slug}/${slug}_instructions.pdf`,

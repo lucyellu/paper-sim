@@ -967,10 +967,34 @@ button.step-num {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
 }
 
-/* ---- UV editor (UV mode) ---- */
+/* ---- Flat editor (Flat mode) ---- */
 
 .uv-editor svg {
   cursor: default;
+}
+
+/* Segmented tool switcher (Artwork / Geometry / UVs). */
+.pe-toolset {
+  display: flex;
+  gap: 2px;
+  background: var(--panel-border);
+  border-radius: 7px;
+  padding: 2px;
+}
+
+.pe-toolset button {
+  border: none;
+  background: transparent;
+}
+
+.pe-toolset button.active {
+  background: var(--accent);
+  border-color: var(--accent-border);
+  color: #fff;
+}
+
+.uv-art-head--on {
+  color: var(--accent);
 }
 
 .uv-editor .pe-inspector {

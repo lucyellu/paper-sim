@@ -28,6 +28,7 @@ import { analyzeDielineImage, analyzeImageData, gableDimsFromAnalysis } from './
 import { applyFaceUV, faceUVAffine, faceUVCentroid, identityFaceUV, pruneUVEdits, sanitizeUVEdits } from './model/uv'
 import { buildPrintCanvas, buildSheetCanvas } from './viewer/texture'
 import {
+  buildInstructionSheetHTML,
   dielineArtworkDataUrl,
   dielinePDF,
   dielinePDFTrueScale,
@@ -58,6 +59,7 @@ if (import.meta.env.DEV) {
     dielineTexturePNG,
     dielineArtworkDataUrl,
     instructionsPDF,
+    buildInstructionSheetHTML,
     rowFaceIds,
     columnFaceIds,
     edgeRing,

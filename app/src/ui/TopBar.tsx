@@ -145,15 +145,16 @@ export function TopBar() {
   const fileItems: MenuItemDef[] = [
     { label: 'New — Tuck box', onClick: () => newDoc('tuck', 'tuck box') },
     {
-      label: 'New — Milk carton (tall/rect)',
+      label: 'New — Milk carton — 1 L (tall)',
       title:
-        'Rectangular gable carton (wider front than sides) — the shape most printed drink cartons use, e.g. the strawberry-milk dieline. Add its artwork with the dieline editor’s Texture tool.',
-      onClick: () => newDoc('gable', 'milk carton', { width: 5, depth: 3.2, height: 13 }),
+        'Tall slim gable carton (~1 litre) — a wider front than sides, the shape most printed drink cartons use (e.g. the strawberry-milk dieline). Units are cm. Add artwork with the dieline editor’s Texture tool.',
+      onClick: () => newDoc('gable', 'milk carton 1L', { width: 5, depth: 3.2, height: 13 }),
     },
     {
-      label: 'New — Milk carton (square base)',
-      title: 'Square-footprint gable carton (front = side width)',
-      onClick: () => newDoc('gable', 'milk carton'),
+      label: 'New — Milk carton — 250 mL (squat)',
+      title:
+        'Small square-base gable carton on the real Pure-Pak 250 mL mini standard: ~57×57 mm base, ~122 mm tall (1 unit = 1 cm). The short school-milk carton, distinct from the tall 1 L one.',
+      onClick: () => newDoc('gable', 'milk carton 250ml', { width: 5.7, depth: 5.7, height: 7.5 }),
     },
     { label: 'New — Can label (tube)', title: 'Faceted cylinder — wrap a label around a can', onClick: () => newDoc('can', 'can label') },
     {
@@ -202,11 +203,11 @@ export function TopBar() {
       onClick: () => s.setWorkspaceMode('fold'),
     },
     {
-      label: 'UV mode',
-      checked: s.workspaceMode === 'uv',
+      label: 'Flat mode',
+      checked: s.workspaceMode === 'flat',
       title:
-        'Select panel UV islands and shift / rotate / scale them over the artwork — prints are warped to match, so the printout still equals the 3D preview',
-      onClick: () => s.setWorkspaceMode('uv'),
+        'Work on the flat sheet: move the artwork to fit the dieline (default), reshape the geometry to trace the artwork, or fine-tune per-panel UVs. Prints stay matched to the 3D preview.',
+      onClick: () => s.setWorkspaceMode('flat'),
     },
     {
       label: 'Instructions mode',
@@ -281,12 +282,15 @@ export function TopBar() {
     },
     {
       label: 'Instructions (print)',
-      onClick: () => needSteps(() => openInstructionSheet(s.doc, s.steps, s.projectName)),
+      onClick: () => {
+        if (s.steps.length === 0) return needSteps(() => false)
+        void openInstructionSheet(s.doc, s.steps, s.projectName, s.material, s.uvEdits)
+      },
     },
     {
       label: 'Instructions PDF',
       onClick: () =>
-        instructionsPDF(s.doc, s.steps, s.projectName)
+        instructionsPDF(s.doc, s.steps, s.projectName, s.material, s.uvEdits)
           .then((pdf) => {
             if (!pdf) needSteps(() => false)
             else downloadBlob(pdf, nextExportName(s.projectName, 'instructions', 'pdf'))

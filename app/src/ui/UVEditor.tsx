@@ -1,17 +1,19 @@
-// UV mode: a Blender-style UV editor over the dieline. The artwork (the sheet
-// texture) is the fixed background; each panel's UV island is drawn on top and
-// can be selected and translated / rotated / scaled — by dragging islands, by
-// the in-scene gizmo, or numerically — to choose which part of the artwork the
-// panel shows. Identity = islands sit exactly on the dieline (faint reference
-// lines). Print exports warp the artwork back per face (buildPrintCanvas), so
-// the printout always matches the 3D preview.
+// Flat mode: work on the flat sheet before it folds. Three tools:
 //
-// Geometry mode flips what gets edited: dragging islands / the gizmo moves the
-// selected panels' dieline vertices instead of their UVs, reshaping the actual
-// object to match the artwork (useful when stretching the art would mangle
-// text). Every finished gesture lands in history as one undoable op.
+//  • Artwork (default) — move / rotate / scale the printed DESIGN so it lines
+//    up with the dieline. This is the common, intuitive task: drag the image
+//    in the scene with a gizmo (or type values). Changes the print and the 3D
+//    preview together (it edits the material's overlay transform).
+//  • Geometry — reshape the dieline ITSELF to trace the artwork, like drawing
+//    a 3D object over a reference. Pick panels, then drag / gizmo to move,
+//    rotate and scale their vertices. Affects the object in every mode.
+//  • UVs (advanced) — shift individual panel UV islands over the artwork.
+//    Print exports warp the artwork back per face so the printout still equals
+//    the 3D preview.
+//
+// Every finished gesture lands in history as one undoable op.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { faceCentroid, sheetBounds, vertexById, type PaperDoc, type Vec2 } from '../model/document'
 import { transformVertices } from '../model/editing'
 import { identityOverlayTransform, type OverlayTransform } from '../model/material'
@@ -34,6 +36,7 @@ interface ViewBox {
   h: number
 }
 
+type FlatTool = 'artwork' | 'geometry' | 'uv'
 type GizmoKind = 'move' | 'moveU' | 'moveV' | 'rotate' | 'scale'
 
 interface Gesture {
@@ -41,13 +44,25 @@ interface Gesture {
   startDoc: Vec2
   /** Full UV map before the gesture (commit prev + drift-free recompute). */
   prevUV: UVEdits
-  /** Dieline before the gesture (geometry mode). */
+  /** Dieline before the gesture (geometry tool). */
   prevDoc: PaperDoc
-  /** Vertices the gesture moves (geometry mode). */
+  /** Vertices the gesture moves (geometry tool). */
   vertexIds: number[]
   selection: number[]
   pivotUV: { u: number; v: number }
   pivotDoc: Vec2
+  startAngle: number
+  startDist: number
+  moved: boolean
+}
+
+/** Dragging the whole artwork image (Artwork tool). */
+interface ArtGesture {
+  kind: GizmoKind
+  startDoc: Vec2
+  prevOverlay: OverlayTransform | undefined
+  start: OverlayTransform
+  center: Vec2
   startAngle: number
   startDist: number
   moved: boolean
@@ -61,8 +76,10 @@ export function UVEditor() {
   const [artUrl, setArtUrl] = useState<string | null>(null)
   const [pan, setPan] = useState<{ px: number; py: number; view: ViewBox } | null>(null)
   const [gesture, setGesture] = useState<Gesture | null>(null)
-  const [geoMode, setGeoMode] = useState(false)
+  const [artGesture, setArtGesture] = useState<ArtGesture | null>(null)
+  const [tool, setTool] = useState<FlatTool>('artwork')
   const fieldPrev = useRef<UVEdits | null>(null)
+  const geoMode = tool === 'geometry'
 
   const { min, max } = sheetBounds(doc)
   const sw = Math.max(max.x - min.x, 0.001)
@@ -79,8 +96,11 @@ export function UVEditor() {
     }
   }
 
-  // The artwork background = the sheet texture (what the UVs sample from).
+  // The baked sheet texture (base + overlay) backs the UV / Geometry tools so
+  // each panel shows exactly what it samples. The Artwork tool renders a LIVE
+  // overlay instead (so dragging never rebuilds the 2048px canvas), so skip it.
   useEffect(() => {
+    if (tool === 'artwork') return
     if (!materialNeedsTexture(s.material)) {
       setArtUrl(null)
       return
@@ -92,7 +112,7 @@ export function UVEditor() {
     return () => {
       stale = true
     }
-  }, [doc, s.material])
+  }, [doc, s.material, tool])
 
   function editFor(id: number): FaceUV {
     return s.uvEdits[id] ?? identityFaceUV()
@@ -123,6 +143,18 @@ export function UVEditor() {
     const c = faceUVCentroid(doc, face)
     const [u, v] = applyFaceUV(t, c, (p.x - min.x) / sw, (p.y - min.y) / sh)
     return uvToDoc(u, v)
+  }
+
+  // ---- artwork placement (Artwork tool) --------------------------------------
+
+  const overlay = s.material.overlayTransform ?? identityOverlayTransform()
+  /** The overlay image rect + center in doc space, from an overlay transform. */
+  function artRect(ov: OverlayTransform) {
+    const w = sw * ov.scaleX
+    const h = sh * ov.scaleY
+    const x = min.x + ov.offsetX * sw // left edge (doc x)
+    const topY = max.y - ov.offsetY * sh // top edge (doc y; offsetY runs down)
+    return { x, topY, w, h, center: { x: x + w / 2, y: topY - h / 2 } }
   }
 
   /** Pivot for group ops: mean of the selected islands' UV centers. */
@@ -189,7 +221,6 @@ export function UVEditor() {
       if (!face) continue
       const c = faceUVCentroid(doc, face)
       const t = start[id] ?? identityFaceUV()
-      // Island center orbits the pivot (clockwise-positive, v-up frame).
       const rx = c.u + t.du - pivot.u
       const ry = c.v + t.dv - pivot.v
       next[id] = {
@@ -203,7 +234,7 @@ export function UVEditor() {
     return next
   }
 
-  /** Geometry mode: the same group transform applied to dieline vertices. */
+  /** Geometry tool: the same group transform applied to dieline vertices. */
   function groupGeoFrom(
     startDoc: PaperDoc,
     ids: number[],
@@ -236,6 +267,13 @@ export function UVEditor() {
     rotate: 'rotate islands',
     scale: 'scale islands',
   }
+  const artLabel: Record<GizmoKind, string> = {
+    move: 'move design',
+    moveU: 'move design',
+    moveV: 'move design',
+    rotate: 'rotate design',
+    scale: 'scale design',
+  }
 
   function commitGesture(g: Gesture) {
     if (!g.moved) return
@@ -243,7 +281,7 @@ export function UVEditor() {
       const cur = useAppStore.getState().doc
       if (cur !== g.prevDoc) {
         s.dispatch(
-          { type: 'setDoc', label: `UV geometry ${gestureLabel[g.kind].split(' ')[0]}`, prev: g.prevDoc, next: cur },
+          { type: 'setDoc', label: `reshape ${gestureLabel[g.kind].split(' ')[0]}`, prev: g.prevDoc, next: cur },
           { alreadyApplied: true },
         )
       }
@@ -259,7 +297,7 @@ export function UVEditor() {
     useAppStore.getState().commitUVEdits(prev, label, coalesce)
   }
 
-  // ---- editing actions -------------------------------------------------------
+  // ---- editing actions (UV tool) ---------------------------------------------
 
   /**
    * Numeric field edit (transient — the op commits on blur/Enter via
@@ -285,7 +323,6 @@ export function UVEditor() {
     } else {
       if (Math.abs(cur) < 1e-6) return
       const f = value / cur
-      // Per-axis group scale: contract island centers along that axis only.
       const next: UVEdits = { ...s.uvEdits }
       for (const id of sel) {
         const face = doc.faces.find((fc) => fc.id === id)
@@ -343,7 +380,14 @@ export function UVEditor() {
     applyAndCommit({}, 'reset all islands')
   }
 
-  // Arrow keys nudge the selected islands; Escape clears the selection.
+  function nudgeArtwork(dx: number, dy: number) {
+    const prev = useAppStore.getState().material.overlayTransform
+    const ov = prev ?? identityOverlayTransform()
+    s.setMaterial({ ...s.material, overlayTransform: { ...ov, offsetX: ov.offsetX + dx, offsetY: ov.offsetY + dy } })
+    useAppStore.getState().commitOverlay(prev, 'nudge design', true)
+  }
+
+  // Arrow keys nudge (artwork or islands); Escape clears the selection.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement
@@ -352,7 +396,6 @@ export function UVEditor() {
         useAppStore.getState().selectFace(null)
         return
       }
-      if (geoMode) return
       const step = e.shiftKey ? 0.02 : 0.005
       const moves: Record<string, [number, number]> = {
         ArrowLeft: [-step, 0],
@@ -361,7 +404,13 @@ export function UVEditor() {
         ArrowDown: [0, -step],
       }
       const m = moves[e.key]
-      if (m && useAppStore.getState().selection.length > 0) {
+      if (!m) return
+      if (tool === 'artwork') {
+        if (!useAppStore.getState().material.overlayImage) return
+        e.preventDefault()
+        // Screen-up should move the image up: offsetY runs downward, so invert.
+        nudgeArtwork(m[0], -m[1])
+      } else if (tool === 'uv' && useAppStore.getState().selection.length > 0) {
         e.preventDefault()
         nudgeSelected(m[0], m[1])
       }
@@ -369,9 +418,9 @@ export function UVEditor() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [geoMode, doc])
+  }, [tool, doc])
 
-  // ---- pointer handling --------------------------------------------------------
+  // ---- pointer handling ------------------------------------------------------
 
   function beginGesture(kind: GizmoKind, e: React.PointerEvent, sel: number[]) {
     const pivotUV = selectionPivot(sel)
@@ -393,15 +442,31 @@ export function UVEditor() {
     })
   }
 
+  function beginArtGesture(kind: GizmoKind, e: React.PointerEvent) {
+    const ov = useAppStore.getState().material.overlayTransform ?? identityOverlayTransform()
+    const center = artRect(ov).center
+    const start = toDoc(e)
+    ;(e.target as Element).setPointerCapture(e.pointerId)
+    setArtGesture({
+      kind,
+      startDoc: start,
+      prevOverlay: useAppStore.getState().material.overlayTransform,
+      start: ov,
+      center,
+      startAngle: Math.atan2(start.y - center.y, start.x - center.x),
+      startDist: Math.max(1e-6, Math.hypot(start.x - center.x, start.y - center.y)),
+      moved: false,
+    })
+  }
+
   function onIslandPointerDown(faceId: number, e: React.PointerEvent) {
-    if (e.button !== 0) return
+    if (e.button !== 0 || tool === 'artwork') return
     e.stopPropagation()
     const additive = e.ctrlKey || e.metaKey
     const wasSelected = s.selection.includes(faceId)
     if (!wasSelected) {
       s.selectFace(faceId, additive)
     } else if (additive) {
-      // Ctrl+click on a selected island deselects it — no drag.
       s.selectFace(faceId, true)
       return
     }
@@ -415,8 +480,40 @@ export function UVEditor() {
       return
     }
     if (e.button !== 0) return
-    // Clicked empty space: clear the selection.
+    // Artwork tool: dragging empty canvas moves the whole design.
+    if (tool === 'artwork') {
+      if (s.material.overlayImage) beginArtGesture('move', e)
+      return
+    }
     if (!e.ctrlKey && !e.metaKey) s.selectFace(null)
+  }
+
+  function updateArtGesture(g: ArtGesture, e: React.PointerEvent) {
+    const cur = toDoc(e)
+    const dx = cur.x - g.startDoc.x
+    const dy = cur.y - g.startDoc.y
+    const next: OverlayTransform = { ...g.start }
+    if (g.kind === 'move' || g.kind === 'moveU' || g.kind === 'moveV') {
+      if (g.kind !== 'moveV') next.offsetX = g.start.offsetX + dx / sw
+      if (g.kind !== 'moveU') next.offsetY = g.start.offsetY - dy / sh
+    } else if (g.kind === 'rotate') {
+      const a = Math.atan2(cur.y - g.center.y, cur.x - g.center.x)
+      let rot = ((g.startAngle - a) * 180) / Math.PI
+      if (e.shiftKey) rot = Math.round(rot / 15) * 15
+      next.rotationDeg = g.start.rotationDeg + rot
+    } else {
+      const d = Math.max(1e-6, Math.hypot(cur.x - g.center.x, cur.y - g.center.y))
+      let f = Math.max(0.05, d / g.startDist)
+      if (e.shiftKey) f = Math.max(0.05, Math.round(f * 10) / 10)
+      const cxFrac = g.start.offsetX + g.start.scaleX / 2
+      const cyFrac = g.start.offsetY + g.start.scaleY / 2
+      next.scaleX = g.start.scaleX * f
+      next.scaleY = g.start.scaleY * f
+      next.offsetX = cxFrac - next.scaleX / 2
+      next.offsetY = cyFrac - next.scaleY / 2
+    }
+    s.setMaterial({ ...s.material, overlayTransform: next })
+    if (!g.moved && (Math.abs(dx) > 1e-4 || Math.abs(dy) > 1e-4)) setArtGesture({ ...g, moved: true })
   }
 
   function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
@@ -429,6 +526,10 @@ export function UVEditor() {
         x: pan.view.x - (e.clientX - pan.px) / scale,
         y: pan.view.y - (e.clientY - pan.py) / scale,
       })
+      return
+    }
+    if (artGesture) {
+      updateArtGesture(artGesture, e)
       return
     }
     if (!gesture) return
@@ -474,6 +575,10 @@ export function UVEditor() {
 
   function onPointerUp() {
     setPan(null)
+    if (artGesture) {
+      if (artGesture.moved) s.commitOverlay(artGesture.prevOverlay, artLabel[artGesture.kind])
+      setArtGesture(null)
+    }
     if (gesture) {
       commitGesture(gesture)
       setGesture(null)
@@ -496,18 +601,16 @@ export function UVEditor() {
     })
   }
 
-  // ---- rendering ---------------------------------------------------------------
+  // ---- rendering -------------------------------------------------------------
 
   const dark = s.theme === 'dark'
-  const colors = useMemo(
-    () => ({
-      dieline: dark ? '#8a7f66' : '#a89173',
-      island: dark ? '#7fb4e6' : '#3f77b8',
-      islandSelected: '#ff9f1c',
-      geo: '#2fa46a',
-    }),
-    [dark],
-  )
+  const colors = {
+    dieline: dark ? '#8a7f66' : '#a89173',
+    island: dark ? '#7fb4e6' : '#3f77b8',
+    islandSelected: '#ff9f1c',
+    geo: '#2fa46a',
+    art: '#c77dff',
+  }
 
   const vbAttr = `${view.x} ${view.y} ${view.w} ${view.h}`
   const strokeW = view.w / 420
@@ -516,6 +619,8 @@ export function UVEditor() {
   const primaryEdit = primary !== null ? editFor(primary) : null
   const hasSel = s.selection.length > 0
   const accent = geoMode ? colors.geo : colors.islandSelected
+  const hasOverlay = !!s.material.overlayImage
+  const rect = artRect(overlay)
 
   const field = (label: string, key: keyof FaceUV, step: number, minVal?: number) => (
     <NumField
@@ -535,15 +640,16 @@ export function UVEditor() {
     />
   )
 
-  /** The in-scene gizmo at the selection pivot (like fold mode's W/E/R). */
-  function Gizmo() {
-    const sel = s.selection
-    const pivot = geoMode
-      ? geoPivotDoc(sel)
-      : (() => {
-          const p = selectionPivot(sel)
-          return uvToDoc(p.u, p.v)
-        })()
+  /** A 2D transform gizmo at `pivot` (doc coords), like fold mode's W/E/R. */
+  function Gizmo({
+    pivot,
+    color,
+    onGrab,
+  }: {
+    pivot: Vec2
+    color: string
+    onGrab: (kind: GizmoKind) => (e: React.PointerEvent) => void
+  }) {
     const cx = pivot.x
     const cy = -pivot.y
     const r = view.w * 0.05
@@ -551,15 +657,9 @@ export function UVEditor() {
     const sq = r * 0.16
     const scx = cx + r * 0.9
     const scy = cy - r * 0.9
-    const grab = (kind: GizmoKind) => (e: React.PointerEvent) => {
-      if (e.button !== 0) return
-      e.stopPropagation()
-      beginGesture(kind, e, sel)
-    }
     return (
       <g className="uv-gizmo">
-        {/* rotate ring */}
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke={accent} strokeWidth={strokeW * 1.4} opacity={0.9} pointerEvents="none" />
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={strokeW * 1.4} opacity={0.9} pointerEvents="none" />
         <circle
           data-uvgizmo="rotate"
           cx={cx}
@@ -569,9 +669,8 @@ export function UVEditor() {
           stroke="transparent"
           strokeWidth={strokeW * 9}
           style={{ cursor: 'grab' }}
-          onPointerDown={grab('rotate')}
+          onPointerDown={onGrab('rotate')}
         />
-        {/* U axis */}
         <line x1={cx + sq} y1={cy} x2={cx + r * 0.72} y2={cy} stroke="#d94848" strokeWidth={strokeW * 2} pointerEvents="none" />
         <polygon
           points={`${cx + r * 0.72},${cy - head / 2} ${cx + r * 0.72},${cy + head / 2} ${cx + r * 0.72 + head},${cy}`}
@@ -587,9 +686,8 @@ export function UVEditor() {
           stroke="transparent"
           strokeWidth={strokeW * 10}
           style={{ cursor: 'ew-resize' }}
-          onPointerDown={grab('moveU')}
+          onPointerDown={onGrab('moveU')}
         />
-        {/* V axis (up on screen) */}
         <line x1={cx} y1={cy - sq} x2={cx} y2={cy - r * 0.72} stroke="#3f9d4f" strokeWidth={strokeW * 2} pointerEvents="none" />
         <polygon
           points={`${cx - head / 2},${cy - r * 0.72} ${cx + head / 2},${cy - r * 0.72} ${cx},${cy - r * 0.72 - head}`}
@@ -605,21 +703,19 @@ export function UVEditor() {
           stroke="transparent"
           strokeWidth={strokeW * 10}
           style={{ cursor: 'ns-resize' }}
-          onPointerDown={grab('moveV')}
+          onPointerDown={onGrab('moveV')}
         />
-        {/* free move (center) */}
         <rect
           data-uvgizmo="move"
           x={cx - sq}
           y={cy - sq}
           width={sq * 2}
           height={sq * 2}
-          fill={accent}
+          fill={color}
           opacity={0.85}
           style={{ cursor: 'move' }}
-          onPointerDown={grab('move')}
+          onPointerDown={onGrab('move')}
         />
-        {/* uniform scale (outside the ring, NE) */}
         <rect
           data-uvgizmo="scale"
           x={scx - sq * 0.8}
@@ -627,14 +723,18 @@ export function UVEditor() {
           width={sq * 1.6}
           height={sq * 1.6}
           fill="transparent"
-          stroke={accent}
+          stroke={color}
           strokeWidth={strokeW * 1.8}
           style={{ cursor: 'nwse-resize' }}
-          onPointerDown={grab('scale')}
+          onPointerDown={onGrab('scale')}
         />
       </g>
     )
   }
+
+  const selGizmoPivot = geoMode ? geoPivotDoc(s.selection) : uvToDoc(selectionPivot(s.selection).u, selectionPivot(s.selection).v)
+
+  const toolName = tool === 'artwork' ? 'Artwork' : tool === 'geometry' ? 'Geometry' : 'UVs'
 
   return (
     <div className="pattern-editor uv-editor">
@@ -647,28 +747,36 @@ export function UVEditor() {
         onWheel={onWheel}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {/* artwork background (the texture the UVs sample from) */}
-        {artUrl ? (
-          <image
-            href={artUrl}
-            x={min.x}
-            y={-max.y}
-            width={sw}
-            height={sh}
-            preserveAspectRatio="none"
-            pointerEvents="none"
-          />
+        {/* background: base sheet color always */}
+        <rect x={min.x} y={-max.y} width={sw} height={sh} fill={s.material.baseColor} pointerEvents="none" />
+        {tool === 'artwork' ? (
+          // Live overlay image (transform-driven — smooth dragging).
+          hasOverlay && (
+            <g transform={`rotate(${overlay.rotationDeg} ${rect.center.x} ${-rect.center.y})`} style={{ cursor: 'move' }}>
+              <image
+                href={s.material.overlayImage}
+                x={rect.x}
+                y={-rect.topY}
+                width={rect.w}
+                height={rect.h}
+                preserveAspectRatio="none"
+                opacity={0.96}
+                onPointerDown={(e) => {
+                  if (e.button === 0) {
+                    e.stopPropagation()
+                    beginArtGesture('move', e)
+                  }
+                }}
+              />
+            </g>
+          )
         ) : (
-          <rect
-            x={min.x}
-            y={-max.y}
-            width={sw}
-            height={sh}
-            fill={s.material.baseColor}
-            pointerEvents="none"
-          />
+          artUrl && (
+            <image href={artUrl} x={min.x} y={-max.y} width={sw} height={sh} preserveAspectRatio="none" pointerEvents="none" />
+          )
         )}
-        {/* dieline reference (where the paper is; faint) */}
+
+        {/* dieline reference (where the paper is) */}
         {doc.edges.map((e) => {
           const a = vertexById(doc, e.v1).pos
           const b = vertexById(doc, e.v2).pos
@@ -680,100 +788,130 @@ export function UVEditor() {
               x2={b.x}
               y2={-b.y}
               stroke={colors.dieline}
-              strokeOpacity={0.55}
+              strokeOpacity={tool === 'artwork' ? 0.9 : 0.55}
               strokeWidth={strokeW * (e.kind === 'cut' ? 1.4 : 1)}
               strokeDasharray={e.kind === 'crease' ? `${strokeW * 4} ${strokeW * 3}` : undefined}
               pointerEvents="none"
             />
           )
         })}
-        {/* UV islands (selectable, draggable) */}
-        {doc.faces.map((f) => {
-          const pts = f.vertexIds
-            .map((vid) => {
-              const p = uvVertexDocPos(f.id, vid)
-              return `${p.x},${-p.y}`
-            })
-            .join(' ')
-          const isSel = s.selection.includes(f.id)
-          const stroke = isSel ? accent : colors.island
-          return (
-            <polygon
-              key={f.id}
-              data-faceid={f.id}
-              points={pts}
-              fill={stroke}
-              fillOpacity={isSel ? 0.28 : 0.1}
-              stroke={stroke}
-              strokeOpacity={isSel ? 0.95 : 0.6}
-              strokeWidth={strokeW * (isSel ? 2.2 : 1.4)}
-              strokeLinejoin="round"
-              style={{ cursor: gesture ? 'grabbing' : 'grab' }}
-              onPointerDown={(ev) => onIslandPointerDown(f.id, ev)}
-            >
-              <title>{f.name}</title>
-            </polygon>
-          )
-        })}
-        {hasSel && <Gizmo />}
+
+        {/* UV islands (selectable) — hidden in the Artwork tool */}
+        {tool !== 'artwork' &&
+          doc.faces.map((f) => {
+            const pts = f.vertexIds
+              .map((vid) => {
+                const p = uvVertexDocPos(f.id, vid)
+                return `${p.x},${-p.y}`
+              })
+              .join(' ')
+            const isSel = s.selection.includes(f.id)
+            const stroke = isSel ? accent : colors.island
+            return (
+              <polygon
+                key={f.id}
+                data-faceid={f.id}
+                points={pts}
+                fill={stroke}
+                fillOpacity={isSel ? 0.28 : 0.1}
+                stroke={stroke}
+                strokeOpacity={isSel ? 0.95 : 0.6}
+                strokeWidth={strokeW * (isSel ? 2.2 : 1.4)}
+                strokeLinejoin="round"
+                style={{ cursor: gesture ? 'grabbing' : 'grab' }}
+                onPointerDown={(ev) => onIslandPointerDown(f.id, ev)}
+              >
+                <title>{f.name}</title>
+              </polygon>
+            )
+          })}
+
+        {tool === 'artwork' && hasOverlay && (
+          <Gizmo pivot={rect.center} color={colors.art} onGrab={(kind) => (e) => {
+            if (e.button !== 0) return
+            e.stopPropagation()
+            beginArtGesture(kind, e)
+          }} />
+        )}
+        {tool !== 'artwork' && hasSel && (
+          <Gizmo pivot={selGizmoPivot} color={accent} onGrab={(kind) => (e) => {
+            if (e.button !== 0) return
+            e.stopPropagation()
+            beginGesture(kind, e, s.selection)
+          }} />
+        )}
       </svg>
 
       {/* toolbar */}
       <div className="pe-toolbar">
-        <span className="pe-title">UV editor</span>
-        <button
-          className={geoMode ? 'active' : ''}
-          onClick={() => setGeoMode(!geoMode)}
-          title="Edit the dieline itself: dragging islands / the gizmo moves, rotates and scales the selected panels' geometry (the object reshapes to match the artwork instead of the artwork stretching). Undoable; refolds live."
-        >
-          ⛭ Geometry
-        </button>
+        <span className="pe-title">Flat editor</span>
+        <div className="pe-toolset">
+          <button
+            className={tool === 'artwork' ? 'active' : ''}
+            onClick={() => setTool('artwork')}
+            title="Move / rotate / scale the printed design to line it up with the dieline — the common task. Drag it in the scene or type values."
+          >
+            🖼 Artwork
+          </button>
+          <button
+            className={tool === 'geometry' ? 'active' : ''}
+            onClick={() => setTool('geometry')}
+            title="Reshape the dieline itself to trace the artwork (like drawing a 3D object over a reference). Pick panels, then drag / gizmo. Changes the object in every mode."
+          >
+            ⛭ Geometry
+          </button>
+          <button
+            className={tool === 'uv' ? 'active' : ''}
+            onClick={() => setTool('uv')}
+            title="Advanced: shift individual panel UV islands over the artwork. Prints warp to match, so the printout still equals the 3D preview."
+          >
+            ▦ UVs
+          </button>
+        </div>
         <span className="pe-sep" />
-        <button onClick={() => s.selectFaces(doc.faces.map((f) => f.id))}>Select all</button>
-        <button
-          disabled={!hasSel}
-          onClick={resetSelected}
-          title="Snap the selected islands back onto the dieline"
-        >
-          ↺ Reset selected
-        </button>
-        <button
-          disabled={Object.keys(s.uvEdits).length === 0}
-          onClick={resetAll}
-          title="Snap every island back onto the dieline"
-        >
-          ↺ Reset all
-        </button>
-        <span className="pe-sep" />
+        {tool === 'uv' && (
+          <>
+            <button onClick={() => s.selectFaces(doc.faces.map((f) => f.id))}>Select all</button>
+            <button disabled={!hasSel} onClick={resetSelected} title="Snap the selected islands back onto the dieline">
+              ↺ Reset selected
+            </button>
+            <button
+              disabled={Object.keys(s.uvEdits).length === 0}
+              onClick={resetAll}
+              title="Snap every island back onto the dieline"
+            >
+              ↺ Reset all
+            </button>
+            <span className="pe-sep" />
+          </>
+        )}
         <button onClick={() => setView(fitView())}>⤢ Fit</button>
         <button onClick={() => s.setWorkspaceMode('fold')}>✔ Done</button>
       </div>
 
       <p className="pe-hint">
-        {geoMode
-          ? 'Geometry mode: dragging islands (or the gizmo) moves the selected panels’ dieline vertices — the object reshapes to match the artwork. Shared edges pull their neighbours. Ctrl+Z undoes.'
-          : s.material.overlayImage
-            ? 'Drag an island (or use the gizmo) to choose which part of the artwork each panel shows. Ctrl+click adds to the selection; arrows nudge; Ctrl+Z undoes. Prints are warped to match, so the printout still equals the 3D preview.'
-            : 'No design loaded — add one below (Artwork) or in Fold mode → dieline editor → Texture tool. Wheel = zoom, right-drag = pan.'}
+        {tool === 'artwork'
+          ? hasOverlay
+            ? 'Drag the design to slide it over the dieline; the gizmo rotates / scales it (arrows nudge). Everything you do here changes the print and the 3D preview together. Ctrl+Z undoes.'
+            : 'No design loaded — add one below (Artwork ▸ under the inspector) or in Fold mode → dieline editor → Texture tool. Wheel = zoom, right-drag = pan.'
+          : tool === 'geometry'
+            ? 'Geometry: pick panels, then drag them (or the gizmo) to move / rotate / scale their dieline vertices — the object reshapes to match the artwork. Shared edges pull their neighbours. Ctrl+Z undoes.'
+            : 'UVs (advanced): drag an island or the gizmo to choose which part of the artwork each panel shows. Ctrl+click multi-selects; arrows nudge. Prints warp to match. Ctrl+Z undoes.'}
       </p>
 
-      {/* transform inspector */}
+      {/* inspector */}
       <div className="pe-inspector tex-inspector">
-        <h4>UV transform</h4>
-        <p className="uv-sel-label">
-          {hasSel
-            ? s.selection.length === 1
-              ? (primaryFace?.name ?? `panel ${primary}`)
-              : `${s.selection.length} panels selected`
-            : 'Nothing selected'}
-        </p>
-        {geoMode ? (
-          <p className="pe-hint">
-            Geometry mode — drag islands or the gizmo to reshape the dieline itself. Numeric UV
-            fields apply in UV mode (toggle ⛭ Geometry off).
-          </p>
-        ) : (
+        <h4>Flat editor — {toolName}</h4>
+
+        {tool === 'uv' && (
           <>
+            <p className="uv-sel-label">
+              {hasSel
+                ? s.selection.length === 1
+                  ? (primaryFace?.name ?? `panel ${primary}`)
+                  : `${s.selection.length} panels selected`
+                : 'Nothing selected — click a panel'}
+            </p>
             <div className="tex-grid">
               {field('Offset U', 'du', 0.01)}
               {field('Offset V', 'dv', 0.01)}
@@ -782,50 +920,41 @@ export function UVEditor() {
               {field('Scale V', 'scaleV', 0.05, 0.01)}
             </div>
             <div className="btn-row">
-              <button
-                disabled={!hasSel}
-                onClick={() => rotateSelected(-90)}
-                title="Rotate the selection 90° counter-clockwise"
-              >
+              <button disabled={!hasSel} onClick={() => rotateSelected(-90)} title="Rotate the selection 90° counter-clockwise">
                 ⟲ 90
               </button>
-              <button
-                disabled={!hasSel}
-                onClick={() => rotateSelected(90)}
-                title="Rotate the selection 90° clockwise"
-              >
+              <button disabled={!hasSel} onClick={() => rotateSelected(90)} title="Rotate the selection 90° clockwise">
                 ⟳ 90
               </button>
-              <button
-                disabled={!hasSel}
-                onClick={() => scaleSelectedBy(1 / 1.1)}
-                title="Shrink the selection 10%"
-              >
+              <button disabled={!hasSel} onClick={() => scaleSelectedBy(1 / 1.1)} title="Shrink the selection 10%">
                 −
               </button>
-              <button
-                disabled={!hasSel}
-                onClick={() => scaleSelectedBy(1.1)}
-                title="Grow the selection 10%"
-              >
+              <button disabled={!hasSel} onClick={() => scaleSelectedBy(1.1)} title="Grow the selection 10%">
                 +
               </button>
             </div>
             <p className="pe-hint">
-              Offsets are fractions of the sheet. With several panels selected, fields and buttons
-              move / rotate / scale the selection as one piece about its center. Every change is
-              undoable (Ctrl+Z).
+              Offsets are fractions of the sheet. With several panels selected, fields and buttons act on the
+              selection as one piece about its center. Undoable (Ctrl+Z).
             </p>
           </>
         )}
-        <ArtworkSection />
+
+        {tool === 'geometry' && (
+          <p className="pe-hint">
+            Click panels in the canvas to select them (Ctrl+click adds), then drag them or the gizmo to reshape
+            the dieline. Numeric UV fields live in the UVs tool. Each finished gesture is one undoable edit.
+          </p>
+        )}
+
+        <ArtworkSection highlight={tool === 'artwork'} />
       </div>
     </div>
   )
 }
 
 /** Scale / place the underlying artwork itself (the material's overlay). */
-function ArtworkSection() {
+function ArtworkSection({ highlight }: { highlight: boolean }) {
   const s = useAppStore()
   const m = s.material
   const ov = m.overlayTransform ?? identityOverlayTransform()
@@ -842,7 +971,6 @@ function ArtworkSection() {
     useAppStore.getState().commitOverlay(prev, 'fill sheet')
   }
 
-  /** Detect the artwork's content box (trim margins) and map it onto the sheet. */
   async function autoFit() {
     if (!m.overlayImage || fitting) return
     setFitting(true)
@@ -875,7 +1003,7 @@ function ArtworkSection() {
 
   return (
     <>
-      <h4 className="uv-art-head">Artwork</h4>
+      <h4 className={`uv-art-head${highlight ? ' uv-art-head--on' : ''}`}>Artwork</h4>
       {m.overlayImage ? (
         <>
           <div className="tex-grid">
@@ -898,8 +1026,8 @@ function ArtworkSection() {
             </button>
           </div>
           <p className="pe-hint">
-            Moves / scales the design image itself (same as the Texture tool) — changes the print
-            and the 3D preview together. Undoable.
+            Moves / scales the design image itself — changes the print and the 3D preview together.
+            {highlight ? ' The in-scene gizmo drives these same values.' : ''} Undoable.
           </p>
         </>
       ) : (

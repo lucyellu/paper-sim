@@ -68,7 +68,7 @@ export default function App() {
         <div className="main">
           <ThreeView />
           {workspaceMode === 'fold' && editorMode === 'pattern' && <PatternEditor />}
-          {workspaceMode === 'uv' && <UVEditor />}
+          {workspaceMode === 'flat' && <UVEditor />}
           {workspaceMode === 'instructions' && <InstructionsView />}
           {workspaceMode === 'fold' && <ViewBar />}
           {workspaceMode === 'fold' && editorMode === '3d' && <PatternInset />}

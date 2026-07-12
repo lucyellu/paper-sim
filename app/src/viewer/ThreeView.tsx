@@ -259,6 +259,16 @@ export function ThreeView() {
       const { min, max } = sheetBounds(doc)
       const bw = Math.max(max.x - min.x, 0.001)
       const bh = Math.max(max.y - min.y, 0.001)
+      // Fold-tree depth per face: a flap folded flat (180°) onto its parent is
+      // coplanar with it and z-fights. Deeper (later-folded) panels get a more
+      // negative polygon offset so they win the depth test deterministically —
+      // the flicker where a glue flap overlaps a body panel goes away.
+      const depthOf = new Map<number, number>()
+      for (const fid of tree.order) {
+        const node = tree.nodes.get(fid)
+        const parent = node?.parentFaceId
+        depthOf.set(fid, parent == null ? 0 : (depthOf.get(parent) ?? 0) + 1)
+      }
       for (const face of doc.faces) {
         const pts = face.vertexIds.map((id) => {
           const v = doc.vertices.find((v) => v.id === id)!
@@ -282,7 +292,17 @@ export function ThreeView() {
           uv.setXY(i, u, v)
         }
         uv.needsUpdate = true
-        const mat = new THREE.MeshStandardMaterial({ color: KRAFT, roughness: 0.92 })
+        const depth = depthOf.get(face.id) ?? 0
+        const mat = new THREE.MeshStandardMaterial({
+          color: KRAFT,
+          roughness: 0.92,
+          // Render both faces so a flap seen from behind never disappears
+          // (the "one-sided plane flicker" when a panel is viewed edge-on).
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: -depth,
+          polygonOffsetUnits: -depth * 2,
+        })
         const mesh = new THREE.Mesh(geom, mat)
         mesh.matrixAutoUpdate = false
         mesh.userData.faceId = face.id
@@ -860,8 +880,13 @@ export function ThreeView() {
           rotateDeg: { x: radToDeg(r.x), y: radToDeg(r.y), z: radToDeg(r.z) },
         })
       } else if (st.transformTool === 'scale') {
+        // On a rotated object TransformControls can report wild (even
+        // negative) per-axis values; average the magnitudes and write the
+        // uniform value back so the drag never shears or collapses the model.
         const sc = orientGroup.scale
-        st.setTransform({ scale: Math.max(0.05, (sc.x + sc.y + sc.z) / 3) })
+        const uniform = Math.max(0.05, (Math.abs(sc.x) + Math.abs(sc.y) + Math.abs(sc.z)) / 3)
+        orientGroup.scale.setScalar(uniform)
+        st.setTransform({ scale: uniform })
       }
     })
     // r0.166 TransformControls is an Object3D; newer versions expose getHelper().
@@ -895,6 +920,10 @@ export function ThreeView() {
       }
       const mode = s.transformTool === 'move' ? 'translate' : s.transformTool
       transformControls.setMode(mode as 'translate' | 'rotate' | 'scale')
+      // Scale must run in LOCAL space: world-space scaling of a rotated
+      // object is ill-defined and used to collapse the model to the 0.05
+      // floor (the "model shrinks and can't be fixed" bug).
+      transformControls.setSpace(s.transformTool === 'scale' ? 'local' : 'world')
       transformControls.attach(s.transformTool === 'move' ? placementGroup : orientGroup)
       transformControls.enabled = true
       transformControls.visible = true

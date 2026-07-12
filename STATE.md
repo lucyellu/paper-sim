@@ -12,7 +12,7 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs`
    Product direction lives in `VISION.md` (pillars, product ladder, what's parked).
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
@@ -262,6 +262,41 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 ## Progress log
 
 *(newest first)*
+
+- **2026-07-12 (latest)** — **Flat-mode rework + carton/gizmo/flicker fixes** (user, from screenshots:
+  a rotated model shrank to a size they couldn't scale back; square-base carton felt the same as
+  the tall one — wanted a real shorter 250 mL; selecting per-panel UV islands as the *default* in
+  "UV mode" was confusing and not print-faithful; wanted **artwork-first** placement with an
+  in-scene gizmo; rename UV mode → **Flat mode** where you can also edit the geometry to trace the
+  artwork; a folded flap overlapped the design with z-fighting flicker; instructions/exported
+  dielines should always include the textures/artwork).
+  - **Scale-gizmo collapse fix** (viewer/ThreeView): world-space `TransformControls` scaling of a
+    *rotated* object decomposed into wild/negative per-axis values that averaged to the 0.05 floor
+    and couldn't recover. Now scale runs in **local space** (`setSpace('local')` for the scale
+    tool) and `objectChange` averages **magnitudes**, clamps ≥0.05, and writes the uniform value
+    back to the group — the model can shrink *and* grow again.
+  - **Real carton sizes**: square-base template is now a genuine **250 mL squat** gable
+    (`{width:5.7, depth:5.7, height:7.5}` cm — Pure-Pak mini standard, ~57 mm square base), the
+    tall one relabelled **1 L (tall)**. Menu labels/titles note they are real standard sizes.
+  - **UV mode → Flat mode**: `WorkspaceMode 'uv' → 'flat'`. The editor (still `ui/UVEditor.tsx`)
+    is now a 3-tool segmented workspace (`.pe-toolset`): **Artwork** (default), **Geometry**,
+    **UVs**. Artwork = the intuitive default: move/rotate/scale the design **overlay** with an
+    in-scene gizmo (live SVG image, transform-driven so dragging never rebuilds the 2048px canvas),
+    arrows nudge (`commitOverlay` coalesces), numeric fields + Auto-fit/Fill sheet. Geometry =
+    the old geo-reshape, promoted to a first-class tool (pick panels, drag/gizmo → `setDoc`
+    ops labelled "reshape …"). UVs = the old island editor (advanced; islands + numeric grid only
+    here). `commitOverlay` gained a `coalesce` arg to mirror `commitUVEdits`.
+  - **Z-fight fix** (viewer): face meshes get depth-keyed `polygonOffset` (deeper/later-folded
+    panels pulled toward the camera by fold-tree depth) + `DoubleSide`, so a glue flap folded flat
+    onto a body panel stops flickering.
+  - **Artwork in instructions/exports**: `instructionsPDF`, `buildInstructionSheetHTML`,
+    `openInstructionSheet`, the in-app Instructions preview, and the project bundle's dieline
+    SVG/PDF all composite the printed design under the line work when the material has artwork.
+  - **Verify**: `verify-v10` rewritten for Flat mode (default Artwork tool, tool switching,
+    artwork-gizmo drag → `setOverlay`, geometry reshape, UV typing/gizmo/undo). New
+    `scripts/verify-v11.mjs` (scale-gizmo-on-rotated recovery, 250 mL vs 1 L sizes differ,
+    instructions/PDF carry artwork, depth-keyed polygon offsets). Full 15-script suite +
+    typecheck green, zero page errors.
 
 - **2026-07-12 (later)** — **UV editor feedback round** (user: scale field wouldn't accept 0.6 —
   couldn't clear the 1; UV moves had no undo/history; "Fit to dieline" didn't match the dieline;
