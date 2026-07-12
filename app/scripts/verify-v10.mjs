@@ -143,7 +143,7 @@ await page.click('.menu-item:has-text("UV mode")')
 const uvVisible = await page.locator('.uv-editor').count()
 const uvIslands = await page.locator('.uv-editor polygon[data-faceid]').count()
 
-// ---- 3. UI: drag an island -> selection + translated UVs ----------------------
+// ---- 3. UI: drag an island -> selection + translated UVs + ONE undoable op ----
 const island = page.locator('.uv-editor polygon[data-faceid]').first()
 const islandId = Number(await island.getAttribute('data-faceid'))
 const box = await island.boundingBox()
@@ -153,16 +153,34 @@ await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 25, {
 await page.mouse.up()
 const dragResult = await page.evaluate((id) => {
   const st = window.paperSim.store.getState()
-  return { selected: st.selection.includes(id), edit: st.uvEdits[id] ?? null }
+  const log = st.history.log
+  const top = log[log.length - 1]
+  const before = st.uvEdits[id] ?? null
+  st.undo()
+  const afterUndo = window.paperSim.store.getState().uvEdits[id] ?? null
+  window.paperSim.store.getState().redo()
+  const afterRedo = window.paperSim.store.getState().uvEdits[id] ?? null
+  return {
+    selected: st.selection.includes(id),
+    edit: before,
+    topOp: top?.type,
+    undoCleared: afterUndo === null,
+    redoRestored: !!afterRedo && Math.abs(afterRedo.du - before.du) < 1e-9,
+  }
 }, islandId)
 
-// ---- 3b. UI: typing a scale with several panels selected scales the
-// selection as ONE piece about its center (not each island separately) --------
+// ---- 3b. UI: TYPING "0.6" into a scale field works (the field used to snap
+// back to 1 on the intermediate keystrokes) and scales the multi-selection as
+// ONE piece about its center (not each island separately) ----------------------
 await page.evaluate(() => window.paperSim.store.getState().newDocument('tuck'))
 await page.click('.topbar .menu-label:has-text("Mode")')
 await page.click('.menu-item:has-text("UV mode")')
 await page.click('.pe-toolbar button:has-text("Select all")')
-await page.locator('.uv-editor .tex-grid').first().locator('input').nth(4).fill('0.6')
+const scaleVInput = page.locator('.uv-editor .tex-grid').first().locator('input').nth(4)
+await scaleVInput.click()
+await scaleVInput.press('Control+a')
+await page.keyboard.type('0.6', { delay: 40 }) // char-by-char, like a human
+await scaleVInput.press('Enter')
 const groupScale = await page.evaluate(() => {
   const P = window.paperSim
   const st = P.store.getState()
@@ -191,6 +209,118 @@ const groupOk =
   Math.abs(groupScale.scaleV - 0.6) < 1e-9 &&
   Math.abs(groupScale.scaleU - 1) < 1e-9
 
+// ---- 3c. UI: in-scene gizmo — drag the scale handle to grow the selection -----
+const gizmoCount = await page.locator('.uv-gizmo').count()
+const scaleUBefore = await page.evaluate(() => {
+  const st = window.paperSim.store.getState()
+  return (st.uvEdits[st.doc.faces[0].id] ?? window.paperSim.identityFaceUV()).scaleU
+})
+const pivotBox = await page.locator('[data-uvgizmo="move"]').boundingBox()
+const handleBox = await page.locator('[data-uvgizmo="scale"]').boundingBox()
+const hx = handleBox.x + handleBox.width / 2
+const hy = handleBox.y + handleBox.height / 2
+const px2 = pivotBox.x + pivotBox.width / 2
+const py2 = pivotBox.y + pivotBox.height / 2
+await page.mouse.move(hx, hy)
+await page.mouse.down()
+// Pull the handle to ~1.5x its distance from the pivot.
+await page.mouse.move(px2 + (hx - px2) * 1.5, py2 + (hy - py2) * 1.5, { steps: 6 })
+await page.mouse.up()
+const gizmoScale = await page.evaluate((before) => {
+  const st = window.paperSim.store.getState()
+  const t = st.uvEdits[st.doc.faces[0].id] ?? window.paperSim.identityFaceUV()
+  const top = st.history.log[st.history.log.length - 1]
+  return { before, after: t.scaleU, topOp: top?.type, topLabel: top?.label }
+}, scaleUBefore)
+const gizmoOk =
+  gizmoCount === 1 &&
+  gizmoScale.after > gizmoScale.before * 1.2 &&
+  gizmoScale.topOp === 'setUVs' &&
+  gizmoScale.topLabel === 'scale islands'
+
+// ---- 3d. UI: Geometry mode — dragging an island moves the dieline itself,
+// as one undoable setDoc op ------------------------------------------------------
+await page.click('.pe-toolbar button:has-text("Reset all")')
+await page.click('.pe-toolbar button:has-text("Geometry")')
+const geoBefore = await page.evaluate(() => {
+  const st = window.paperSim.store.getState()
+  const f = st.doc.faces[0]
+  const v = st.doc.vertices.find((x) => x.id === f.vertexIds[0])
+  return { faceId: f.id, vid: v.id, x: v.pos.x, y: v.pos.y, uvCount: Object.keys(st.uvEdits).length }
+})
+const geoIsland = page.locator(`.uv-editor polygon[data-faceid="${geoBefore.faceId}"]`)
+const gb = await geoIsland.boundingBox()
+await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2)
+await page.mouse.down()
+await page.mouse.move(gb.x + gb.width / 2 + 50, gb.y + gb.height / 2, { steps: 6 })
+await page.mouse.up()
+const geoResult = await page.evaluate((before) => {
+  const st = window.paperSim.store.getState()
+  const v = st.doc.vertices.find((x) => x.id === before.vid)
+  const top = st.history.log[st.history.log.length - 1]
+  const movedX = v.pos.x - before.x
+  st.undo()
+  const v2 = window.paperSim.store.getState().doc.vertices.find((x) => x.id === before.vid)
+  return {
+    movedX,
+    uvUntouched: Object.keys(st.uvEdits).length === before.uvCount,
+    topOp: top?.type,
+    topLabel: top?.label,
+    undoRestored: Math.abs(v2.pos.x - before.x) < 1e-9,
+  }
+}, geoBefore)
+const geoOk =
+  geoResult.movedX > 0.5 &&
+  geoResult.uvUntouched === true &&
+  geoResult.topOp === 'setDoc' &&
+  /UV geometry/.test(geoResult.topLabel ?? '') &&
+  geoResult.undoRestored === true
+await page.click('.pe-toolbar button:has-text("Geometry")') // back to UV mode
+
+// ---- 3e. UI: Artwork section — numeric edit commits an op; Auto-fit detects
+// the content box (margins trimmed) ----------------------------------------------
+await page.evaluate(() => {
+  // Artwork with big margins: content fills only the middle half.
+  const art = document.createElement('canvas')
+  art.width = 200
+  art.height = 200
+  const ctx = art.getContext('2d')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, 200, 200)
+  ctx.fillStyle = '#2255cc'
+  ctx.fillRect(50, 50, 100, 100)
+  const st = window.paperSim.store.getState()
+  st.setMaterial({ ...st.material, overlayImage: art.toDataURL('image/png') })
+})
+const artInput = page.locator('.uv-editor .tex-grid').nth(1).locator('input').first()
+await artInput.click()
+await artInput.press('Control+a')
+await page.keyboard.type('0.2', { delay: 30 })
+await artInput.press('Enter')
+const artField = await page.evaluate(() => {
+  const st = window.paperSim.store.getState()
+  const top = st.history.log[st.history.log.length - 1]
+  return { offsetX: st.material.overlayTransform?.offsetX, topOp: top?.type }
+})
+await page.click('.pe-inspector button:has-text("Auto-fit")')
+await page.waitForFunction(
+  () => Math.abs((window.paperSim.store.getState().material.overlayTransform?.scaleX ?? 1) - 1) > 0.3,
+)
+const autoFit = await page.evaluate(() => {
+  const st = window.paperSim.store.getState()
+  const top = st.history.log[st.history.log.length - 1]
+  const ov = st.material.overlayTransform
+  st.undo()
+  const back = window.paperSim.store.getState().material.overlayTransform
+  return { scaleX: ov?.scaleX, topOp: top?.type, undoOffsetX: back?.offsetX }
+})
+const artOk =
+  Math.abs((artField.offsetX ?? 0) - 0.2) < 1e-9 &&
+  artField.topOp === 'setOverlay' &&
+  (autoFit.scaleX ?? 1) > 1.5 &&
+  autoFit.topOp === 'setOverlay' &&
+  Math.abs((autoFit.undoOffsetX ?? 0) - 0.2) < 1e-9
+
 // ---- 4. UI: Instructions mode shows one card per step (+ start) ---------------
 await page.click('.topbar .menu-label:has-text("Mode")')
 await page.click('.menu-item:has-text("Instructions mode")')
@@ -213,6 +343,13 @@ const ui = {
   dragResult,
   groupScale,
   groupOk,
+  gizmoScale,
+  gizmoOk,
+  geoResult,
+  geoOk,
+  artField,
+  autoFit,
+  artOk,
   ivVisible,
   stepCount,
   cardCount,
@@ -224,7 +361,13 @@ const uiOk =
   dragResult.selected === true &&
   dragResult.edit !== null &&
   Math.abs(dragResult.edit.du) > 0.005 &&
+  dragResult.topOp === 'setUVs' &&
+  dragResult.undoCleared === true &&
+  dragResult.redoRestored === true &&
   groupOk &&
+  gizmoOk &&
+  geoOk &&
+  artOk &&
   ivVisible === 1 &&
   cardCount === stepCount + 1 &&
   foldBack === true

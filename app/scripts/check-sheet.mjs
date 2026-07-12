@@ -26,8 +26,10 @@ await page.evaluate(() => {
 })
 await page.waitForTimeout(500)
 
+// The instruction-sheet export moved into the top-bar Export menu.
 const popupPromise = context.waitForEvent('page', { timeout: 15000 })
-await page.getByRole('button', { name: 'Instructions', exact: true }).click()
+await page.click('.topbar .menu-label:has-text("Export")')
+await page.click('.menu-item:has-text("Instructions (print)")')
 const popup = await popupPromise
 await popup.waitForLoadState('domcontentloaded')
 const sheet = await popup.evaluate(() => ({

@@ -5,7 +5,12 @@ import { buildCan, type CanDims } from '../model/can'
 import { buildSleeve, type SleeveDims } from '../model/sleeve'
 import { buildPanelTree, type PanelTree, type PaperDoc } from '../model/document'
 import { fromFoldFile, toFoldFile } from '../model/foldfile'
-import { defaultMaterial, type MaterialSettings } from '../model/material'
+import {
+  defaultMaterial,
+  identityOverlayTransform,
+  type MaterialSettings,
+  type OverlayTransform,
+} from '../model/material'
 import { nextExportName, projectNameFromFileName } from '../model/naming'
 import { templateSteps } from '../model/templates'
 import { identityTransform, type Transform, type Vec3 } from '../model/transform'
@@ -134,8 +139,19 @@ export interface AppState {
   setViewLayout: (layout: ViewLayout) => void
   setEditorMode: (mode: EditorMode) => void
   setWorkspaceMode: (mode: WorkspaceMode) => void
-  /** Replace the UV-edit map (identity entries are pruned automatically). */
+  /**
+   * Replace the UV-edit map WITHOUT history (live drag preview; identity
+   * entries are pruned). Commit the finished gesture with commitUVEdits.
+   */
   setUVEdits: (edits: UVEdits) => void
+  /**
+   * Record one undoable UV op: `prev` = the map before the gesture began.
+   * `coalesce` merges into the top op when it has the same label (so a run of
+   * arrow-key nudges undoes as one action).
+   */
+  commitUVEdits: (prev: UVEdits, label: string, coalesce?: boolean) => void
+  /** Record one undoable artwork-placement op (prev = before the gesture). */
+  commitOverlay: (prev: OverlayTransform | undefined, label: string) => void
   setTransform: (patch: Partial<Transform>) => void
   rotateObject: (axis: keyof Vec3, deltaDeg: number) => void
   resetTransform: () => void
@@ -167,21 +183,51 @@ export const useAppStore = create<AppState>((set, get) => {
   /** Editable slice of the current state (what ops act on). */
   function editable(): EditableState {
     const s = get()
-    return { angles: s.angles, steps: s.steps, doc: s.doc }
+    return {
+      angles: s.angles,
+      steps: s.steps,
+      doc: s.doc,
+      uvEdits: s.uvEdits,
+      overlayTransform: s.material.overlayTransform,
+    }
   }
 
   /** Turn an op-result EditableState into a store update (handles doc edits). */
   function fromEditable(next: EditableState, fallbackDoc?: PaperDoc) {
     const s = get()
     const doc = next.doc ?? fallbackDoc ?? s.doc
-    if (doc === s.doc) return { angles: next.angles, steps: next.steps }
-    return {
-      angles: next.angles,
-      steps: next.steps,
-      doc,
-      tree: buildPanelTree(doc),
-      selection: s.selection.filter((id) => doc.faces.some((f) => f.id === id)),
+    const patch: Partial<AppState> = { angles: next.angles, steps: next.steps }
+    if (doc !== s.doc) {
+      patch.doc = doc
+      patch.tree = buildPanelTree(doc)
+      patch.selection = s.selection.filter((id) => doc.faces.some((f) => f.id === id))
+      patch.selectedEdges = s.selectedEdges.filter((id) => doc.edges.some((e) => e.id === id))
     }
+    if (next.uvEdits !== undefined && next.uvEdits !== s.uvEdits) patch.uvEdits = next.uvEdits
+    if (
+      next.overlayTransform !== undefined &&
+      next.overlayTransform !== s.material.overlayTransform
+    ) {
+      patch.material = { ...s.material, overlayTransform: next.overlayTransform }
+    }
+    return patch
+  }
+
+  /**
+   * Fill the UV / overlay slots of a replayed state: replay() only produces
+   * them when an op set them, so "before the first such op" falls back to
+   * that op's recorded prev (the pre-history value).
+   */
+  function withReplayFallbacks(state: EditableState, log: Op[]): EditableState {
+    if (state.uvEdits === undefined) {
+      const first = log.find((o) => o.type === 'setUVs')
+      if (first && first.type === 'setUVs') state.uvEdits = first.prev
+    }
+    if (state.overlayTransform === undefined) {
+      const first = log.find((o) => o.type === 'setOverlay')
+      if (first && first.type === 'setOverlay') state.overlayTransform = first.prev
+    }
+    return state
   }
 
   return {
@@ -404,7 +450,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const clamped = Math.max(0, Math.min(s.history.log.length, cursor))
       if (clamped === s.history.cursor) return
       const history = { ...s.history, cursor: clamped }
-      const state = replay(history)
+      const state = withReplayFallbacks(replay(history), history.log)
       set({ ...fromEditable(state, s.baseDoc), history, playback: { mode: 'edit' } })
     },
 
@@ -414,7 +460,7 @@ export const useAppStore = create<AppState>((set, get) => {
       const log = s.history.log.filter((_, i) => i !== index)
       const cursor = s.history.cursor > index ? s.history.cursor - 1 : s.history.cursor
       const history = { base: s.history.base, log, cursor }
-      const state = replay(history)
+      const state = withReplayFallbacks(replay(history), s.history.log)
       set({ ...fromEditable(state, s.baseDoc), history, playback: { mode: 'edit' } })
     },
 
@@ -427,7 +473,7 @@ export const useAppStore = create<AppState>((set, get) => {
         else if (i < s.history.cursor) cursor--
       })
       const history = { base: s.history.base, log, cursor }
-      const state = replay(history)
+      const state = withReplayFallbacks(replay(history), s.history.log)
       set({ ...fromEditable(state, s.baseDoc), history, playback: { mode: 'edit' } })
     },
 
@@ -446,6 +492,32 @@ export const useAppStore = create<AppState>((set, get) => {
     setWorkspaceMode: (mode) => set({ workspaceMode: mode }),
 
     setUVEdits: (edits) => set({ uvEdits: pruneUVEdits(edits) }),
+
+    commitUVEdits: (prev, label, coalesce) => {
+      const s = get()
+      const before = pruneUVEdits(prev)
+      if (JSON.stringify(before) === JSON.stringify(s.uvEdits)) return
+      const log = s.history.log
+      const top = s.history.cursor === log.length ? log[log.length - 1] : undefined
+      if (coalesce && top && top.type === 'setUVs' && top.label === label) {
+        set({
+          history: {
+            ...s.history,
+            log: [...log.slice(0, -1), { ...top, next: s.uvEdits }],
+          },
+        })
+        return
+      }
+      s.dispatch({ type: 'setUVs', label, prev: before, next: s.uvEdits }, { alreadyApplied: true })
+    },
+
+    commitOverlay: (prev, label) => {
+      const s = get()
+      const before = prev ?? identityOverlayTransform()
+      const next = s.material.overlayTransform ?? identityOverlayTransform()
+      if (JSON.stringify(before) === JSON.stringify(next)) return
+      s.dispatch({ type: 'setOverlay', label, prev: before, next }, { alreadyApplied: true })
+    },
 
     setTransform: (patch) => {
       const s = get()
@@ -610,5 +682,9 @@ export function describeOp(s: AppState, op: Op): string {
         : `Delete ${op.removed.length} step(s) after step ${op.keepCount}`
     case 'renameStep':
       return `Rename step "${op.prev}" → "${op.next}"`
+    case 'setUVs':
+      return `UV: ${op.label}`
+    case 'setOverlay':
+      return `Artwork: ${op.label}`
   }
 }

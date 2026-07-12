@@ -4,6 +4,8 @@
 // the save file, so undo/redo survives save/load (see STATE.md).
 
 import type { PaperDoc } from './document'
+import type { OverlayTransform } from './material'
+import type { UVEdits } from './uv'
 
 export interface Step {
   id: string
@@ -22,6 +24,10 @@ export interface EditableState {
    * document's stored dieline (only setDoc ops ever change it).
    */
   doc?: PaperDoc
+  /** Per-face UV edits. Undefined = unchanged (only setUVs ops change it). */
+  uvEdits?: UVEdits
+  /** Artwork placement. Undefined = unchanged (only setOverlay ops change it). */
+  overlayTransform?: OverlayTransform
 }
 
 export type Op =
@@ -47,6 +53,20 @@ export type Op =
       nextAngles: Record<number, number>
     }
   | { type: 'renameStep'; stepId: string; prev: string; next: string }
+  | {
+      /** UV-mode island edit. Full snapshots — the maps are small. */
+      type: 'setUVs'
+      label: string
+      prev: UVEdits
+      next: UVEdits
+    }
+  | {
+      /** Artwork placement edit (Texture tool / UV-mode Artwork section). */
+      type: 'setOverlay'
+      label: string
+      prev: OverlayTransform
+      next: OverlayTransform
+    }
 
 export interface HistoryData {
   base: EditableState
@@ -59,8 +79,11 @@ export function cloneEditable(s: EditableState): EditableState {
   return {
     angles: { ...s.angles },
     steps: s.steps.map((st) => ({ ...st, angles: { ...st.angles } })),
-    // Docs are treated as immutable snapshots; sharing the reference is fine.
+    // Docs / UV maps / overlay transforms are treated as immutable snapshots;
+    // sharing the references is fine.
     doc: s.doc,
+    uvEdits: s.uvEdits,
+    overlayTransform: s.overlayTransform,
   }
 }
 
@@ -92,6 +115,10 @@ export function applyOp(s: EditableState, op: Op): EditableState {
         ...s,
         steps: s.steps.map((st) => (st.id === op.stepId ? { ...st, name: op.next } : st)),
       }
+    case 'setUVs':
+      return { ...s, uvEdits: op.next }
+    case 'setOverlay':
+      return { ...s, overlayTransform: op.next }
   }
 }
 
@@ -122,6 +149,10 @@ export function revertOp(s: EditableState, op: Op): EditableState {
         ...s,
         steps: s.steps.map((st) => (st.id === op.stepId ? { ...st, name: op.prev } : st)),
       }
+    case 'setUVs':
+      return { ...s, uvEdits: op.prev }
+    case 'setOverlay':
+      return { ...s, overlayTransform: op.prev }
   }
 }
 

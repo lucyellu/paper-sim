@@ -26,20 +26,22 @@ await page.evaluate(() => {
 await page.waitForTimeout(300)
 
 const names = []
-async function grab(clickLabel) {
+// Exports moved into the top-bar dropdown menus: open the menu, click the item.
+async function grab(menuLabel, itemLabel) {
   const dl = page.waitForEvent('download', { timeout: 20000 })
-  await page.click(`button:has-text("${clickLabel}")`)
+  await page.click(`.topbar .menu-label:has-text("${menuLabel}")`)
+  await page.click(`.menu-item:has-text("${itemLabel}")`)
   const d = await dl
   names.push(d.suggestedFilename())
   return d
 }
 
-await grab('Dieline SVG')
-await grab('Dieline SVG') // second export must iterate, not overwrite
-const pdfDl = await grab('Dieline PDF')
-const instrPdfDl = await grab('Instructions PDF')
-await grab('Save')
-const zipDl = await grab('Export project (zip)')
+await grab('Export', 'Dieline SVG (line art)')
+await grab('Export', 'Dieline SVG (line art)') // second export must iterate, not overwrite
+const pdfDl = await grab('Export', 'Dieline PDF (line art)')
+const instrPdfDl = await grab('Export', 'Instructions PDF')
+await grab('File', 'Save (.fold)')
+const zipDl = await grab('Export', 'Project bundle (zip)')
 const zipPath = await zipDl.path()
 
 const pdfMagic = readFileSync(await pdfDl.path()).slice(0, 5).toString() === '%PDF-'
@@ -63,7 +65,7 @@ const roundtrip = await page.evaluate(() => {
   const { store, toFoldFile } = window.paperSim
   const s = store.getState()
   const file = JSON.parse(
-    JSON.stringify(toFoldFile(s.doc, s.angles, s.steps, s.history, s.objectRotation, s.projectName)),
+    JSON.stringify(toFoldFile(s.doc, s.angles, s.steps, s.history, s.transform, s.projectName)),
   )
   store.getState().loadFile(file, 'whatever.fold')
   const fromTitle = store.getState().projectName

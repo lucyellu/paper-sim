@@ -282,6 +282,26 @@ export function moveVertices(doc: PaperDoc, vertexIds: number[], delta: Vec2): E
   return { doc: next }
 }
 
+/**
+ * Remap a set of vertices through an arbitrary flat-space transform (UV-mode
+ * geometry edits: translate / rotate / scale selected panels to match the
+ * artwork). Vertices shared with unselected panels move too — the dieline is
+ * one connected sheet, so neighbours stretch, exactly like a vertex drag.
+ */
+export function transformVertices(
+  doc: PaperDoc,
+  vertexIds: number[],
+  fn: (p: Vec2) => Vec2,
+): EditResult {
+  if (vertexIds.length === 0) return { doc }
+  const set = new Set(vertexIds)
+  const next = cloneDoc(doc)
+  for (const v of next.vertices) {
+    if (set.has(v.id)) v.pos = fn(v.pos)
+  }
+  return { doc: next }
+}
+
 /** Set/clear the authored target angle of a crease. */
 export function setTargetAngle(
   doc: PaperDoc,

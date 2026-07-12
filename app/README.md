@@ -42,12 +42,17 @@ starts the dev server if it isn't running and opens the app in the browser.
   dieline editor so you can line art up with panels. Saved inside the `.fold` file.
 - **Mode** (top menu) switches the workspace: **Fold mode** (default — everything below),
   **UV mode**, and **Instructions mode**. UV mode is a Blender-style UV editor: the artwork is the
-  fixed background, each panel's **UV island** sits on top — drag an island to choose which part
-  of the artwork that panel shows (Ctrl+click multi-select, arrow keys nudge, numeric
-  offset/rotate/scale in the inspector; translate is the workhorse). With several panels
-  selected, fields and buttons act on the selection **as one piece** about its center. The
-  inspector's **Artwork** section moves/scales the design image itself (same as the Texture
-  tool). Islands default to the dieline exactly; **print exports warp the artwork back per
+  fixed background, each panel's **UV island** sits on top — drag an island, or use the in-scene
+  **gizmo** (center square = move, red/green arrows = axis move, ring = rotate with Shift = 15°
+  snap, corner square = uniform scale) to choose which part of the artwork that panel shows.
+  Ctrl+click multi-selects, arrows nudge, and the inspector has numeric offset/rotate/scale.
+  With several panels selected, everything acts on the selection **as one piece** about its
+  center. The **⛭ Geometry** toggle flips what gets edited: drags and the gizmo then move the
+  selected panels' **dieline vertices** — the object reshapes to match the artwork (shared edges
+  pull their neighbours), instead of stretching art that carries text. The **Artwork** section
+  moves/scales the design image itself, with **Auto-fit** (detects the image's content box and
+  trims background margins) and **Fill sheet**. Every finished gesture is one undoable history
+  op (Ctrl+Z). Islands default to the dieline exactly; **print exports warp the artwork back per
   panel**, so the printout always matches the 3D preview. UV edits are saved in the `.fold`
   file (`paperSim:uvEdits`).
   Instructions mode previews the instruction sheet in-app (dieline + numbered step snapshots)

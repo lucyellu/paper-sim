@@ -263,6 +263,43 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 
 *(newest first)*
 
+- **2026-07-12 (later)** — **UV editor feedback round** (user: scale field wouldn't accept 0.6 —
+  couldn't clear the 1; UV moves had no undo/history; "Fit to dieline" didn't match the dieline;
+  wanted an in-scene gizmo like fold mode; wanted a toggle to edit the actual mesh/geo so the
+  object can be reshaped to match artwork instead of stretching art with text on it).
+  - **Typed-scale fix**: shared `NumField` (ui/NumField.tsx) keeps a local draft while focused —
+    a controlled number input snapped back to "1" on the intermediate ""/"0" keystrokes, which
+    read as "only scales larger". Valid values apply live; blur/Enter restores canonical display.
+    Scales guard `min 0.01`. Used by the UV inspector, Artwork section, and the Texture tool.
+  - **UV history**: two new ops — `setUVs` (full prev/next UV-map snapshots) and `setOverlay`
+    (artwork `overlayTransform`) — extend `EditableState` (like `doc`, undefined = unchanged).
+    Drags stay transient and commit ONE op on pointer-up (`commitUVEdits` / `commitOverlay`);
+    arrow-nudge runs coalesce into a single op; numeric fields commit on blur. Replay-based
+    paths (revert-to-row, op delete) fall back to the first op's recorded `prev`. Texture-tool
+    drags/fields in the dieline editor commit the same ops, so artwork placement is undoable
+    everywhere. History rows read "UV: move islands", "Artwork: auto-fit artwork".
+  - **In-scene gizmo** (`.uv-gizmo`): center square = free move, red/green axis arrows, ring =
+    rotate (Shift snaps 15°), corner square = uniform scale — all group transforms about the
+    selection pivot, computed from the gesture-start snapshot (no drift). Gotcha: SVG handles
+    need `fill="transparent"`, not `none` — `none` isn't hit-testable and clicks fell through
+    to the island below.
+  - **⛭ Geometry mode**: the same drag/gizmo gestures move the selected panels' dieline
+    VERTICES (`transformVertices` in editing.ts) instead of UVs — reshape the object to match
+    the artwork. Live preview via `setDocTransient`, one undoable `setDoc` op per gesture
+    ("UV geometry move/rotate/scale"). Shared vertices pull neighbouring panels (connected
+    sheet); fold steps re-apply at the new shape. UV numeric fields hide in geo mode.
+  - **Artwork fit**: "Fit to dieline" renamed **Fill sheet** (that's what it does); new
+    **Auto-fit** detects the artwork's content box via `analyzeDielineImage` and maps it onto
+    the sheet (trims background margins — the reason "fit" never lined up). Full panel-line
+    registration remains the import wizard's job.
+  - **Verify**: verify-v10 extended — char-by-char typing "0.6" into Scale V, drag → one
+    `setUVs` op + undo/redo round-trip, gizmo scale-handle drag (>1.2×, correct label), geo-mode
+    drag moves vertices + undo restores + uvEdits untouched, artwork field commit + auto-fit
+    (scaleX 2 on a 50%-content test image) + undo. Also repaired two stale scripts broken since
+    the 2026-07-10 top-menu round (not by this work): check-exports.mjs and check-sheet.mjs
+    clicked sidebar buttons that moved into the File/Export menus. Whole suite + repro-crash +
+    check-exports + check-sheet green, zero page errors.
+
 - **2026-07-12** — **Mode menu + UV editor round** (user: "we wanted to avoid editing UV maps to
   keep dieline→printout fidelity, but at least allow *shifting* UVs so art lines up — add a top-menu
   **Mode** with fold / UV / instructions; UV mode = dieline-style view, select UVs, translate

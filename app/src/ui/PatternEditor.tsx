@@ -13,6 +13,7 @@ import {
 import { sheetBounds, vertexById, type Vec2 } from '../model/document'
 import { identityOverlayTransform, type OverlayTransform } from '../model/material'
 import { getDisplayAngles, useAppStore } from '../state/store'
+import { NumField } from './NumField'
 
 type Tool = 'select' | 'crease' | 'cut' | 'delete' | 'texture' | 'trace'
 
@@ -227,6 +228,8 @@ export function PatternEditor() {
       return
     }
     if (texDrag) {
+      // One undoable artwork op per finished drag.
+      s.commitOverlay(texDrag.start, 'move design')
       setTexDrag(null)
       return
     }
@@ -583,6 +586,7 @@ function TextureInspector() {
   const m = s.material
   const ov = m.overlayTransform ?? identityOverlayTransform()
   const fileRef = useRef<HTMLInputElement>(null)
+  const prevOv = useRef<OverlayTransform | undefined>(undefined)
 
   function setOv(patch: Partial<OverlayTransform>) {
     s.setMaterial({ ...m, overlayTransform: { ...ov, ...patch } })
@@ -602,18 +606,17 @@ function TextureInspector() {
   }
 
   const field = (label: string, key: keyof OverlayTransform, step: number) => (
-    <label className="tex-field">
-      <span>{label}</span>
-      <input
-        type="number"
-        step={step}
-        value={Math.round(ov[key] * 1000) / 1000}
-        onChange={(e) => {
-          const v = Number(e.target.value)
-          if (Number.isFinite(v)) setOv({ [key]: v } as Partial<OverlayTransform>)
-        }}
-      />
-    </label>
+    <NumField
+      label={label}
+      step={step}
+      value={ov[key]}
+      onFocus={() => (prevOv.current = useAppStore.getState().material.overlayTransform)}
+      onChange={(v) => setOv({ [key]: v } as Partial<OverlayTransform>)}
+      onDone={() => {
+        useAppStore.getState().commitOverlay(prevOv.current, `set ${label.toLowerCase()}`)
+        prevOv.current = undefined
+      }}
+    />
   )
 
   return (
@@ -643,10 +646,14 @@ function TextureInspector() {
           </div>
           <div className="btn-row">
             <button
-              title="Reset the design to fill the whole dieline"
-              onClick={() => setOv(identityOverlayTransform())}
+              title="Stretch the whole image over the whole sheet"
+              onClick={() => {
+                const prev = m.overlayTransform
+                s.setMaterial({ ...m, overlayTransform: identityOverlayTransform() })
+                useAppStore.getState().commitOverlay(prev, 'fill sheet')
+              }}
             >
-              ⤢ Fit to dieline
+              ⤢ Fill sheet
             </button>
           </div>
           <p className="pe-hint" style={{ position: 'static' }}>
