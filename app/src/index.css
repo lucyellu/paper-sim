@@ -609,6 +609,15 @@ button.step-num {
   z-index: 2;
 }
 
+.inset svg {
+  max-height: calc(100vh - 220px);
+}
+
+.inset.collapsed {
+  width: auto;
+  padding: 2px 6px;
+}
+
 .inset-label {
   text-align: center;
   font-size: 10px;
@@ -616,6 +625,42 @@ button.step-num {
   margin-top: 4px;
   text-transform: uppercase;
   letter-spacing: 0.8px;
+}
+
+.inset-head {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+
+.inset-head:hover {
+  color: var(--text);
+}
+
+.inset.collapsed .inset-head {
+  margin-top: 0;
+}
+
+/* Right edge: drag to resize (height follows the pattern's aspect). */
+.inset-grip {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  right: -4px;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 3;
+  touch-action: none;
+  border-radius: 4px;
+}
+
+.inset-grip:hover {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 /* ---- timeline ---- */

@@ -4,7 +4,7 @@
 
 import { useRef, useState, type ReactNode } from 'react'
 
-function readPref<T>(key: string, fallback: T): T {
+export function readPref<T>(key: string, fallback: T): T {
   try {
     const raw = window.localStorage.getItem(key)
     return raw !== null ? (JSON.parse(raw) as T) : fallback
@@ -13,8 +13,12 @@ function readPref<T>(key: string, fallback: T): T {
   }
 }
 
-function writePref(key: string, value: unknown) {
-  window.localStorage.setItem(key, JSON.stringify(value))
+export function writePref(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // Storage blocked or full: layout just won't persist.
+  }
 }
 
 /** Collapsible titled block used inside the side panels. */

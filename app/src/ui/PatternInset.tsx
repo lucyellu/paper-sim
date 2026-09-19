@@ -1,8 +1,79 @@
+import { useRef, useState } from 'react'
 import { columnFaceIds, rowFaceIds, sheetBounds, vertexById } from '../model/document'
 import { getDisplayAngles, selectedHinge, useAppStore } from '../state/store'
+import { readPref, writePref } from './panels'
 
-/** 2D dieline inset (bottom-left), mirroring PackCAD's pattern view. */
+const PREF_KEY = 'paperSim.panel.patternInset'
+const MIN_W = 140
+const MAX_W = 900
+const DEFAULT_W = 220
+
+/**
+ * 2D dieline inset (bottom-left), mirroring PackCAD's pattern view. Drag its
+ * right edge to resize; click the label to collapse it to a pill.
+ */
 export function PatternInset() {
+  const [saved] = useState(() => readPref(PREF_KEY, { width: DEFAULT_W, collapsed: false }))
+  const [width, setWidth] = useState(
+    Math.max(MIN_W, Math.min(MAX_W, saved.width ?? DEFAULT_W)),
+  )
+  const [collapsed, setCollapsed] = useState(saved.collapsed ?? false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  function onGripDown(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault()
+    e.stopPropagation()
+    const grip = e.currentTarget
+    grip.setPointerCapture(e.pointerId)
+    const onMove = (ev: PointerEvent) => {
+      const root = rootRef.current!
+      const rect = root.getBoundingClientRect()
+      // Don't let it grow past the viewport area it floats over.
+      const room = (root.offsetParent?.clientWidth ?? window.innerWidth) - 24
+      const w = Math.min(ev.clientX - rect.left, room)
+      setWidth(Math.max(MIN_W, Math.min(MAX_W, Math.round(w))))
+    }
+    const onUp = () => {
+      grip.removeEventListener('pointermove', onMove)
+      grip.removeEventListener('pointerup', onUp)
+      setWidth((w) => {
+        writePref(PREF_KEY, { width: w, collapsed: false })
+        return w
+      })
+    }
+    grip.addEventListener('pointermove', onMove)
+    grip.addEventListener('pointerup', onUp)
+  }
+
+  function toggle() {
+    setCollapsed(!collapsed)
+    writePref(PREF_KEY, { width, collapsed: !collapsed })
+  }
+
+  if (collapsed) {
+    return (
+      <div className="inset collapsed">
+        <button className="inset-label inset-head" title="Expand 2D pattern" onClick={toggle}>
+          <span className="chev">▸</span> 2D pattern
+        </button>
+      </div>
+    )
+  }
+
+  return <PatternInsetBody rootRef={rootRef} width={width} onGripDown={onGripDown} onToggle={toggle} />
+}
+
+function PatternInsetBody({
+  rootRef,
+  width,
+  onGripDown,
+  onToggle,
+}: {
+  rootRef: React.RefObject<HTMLDivElement>
+  width: number
+  onGripDown: (e: React.PointerEvent<HTMLDivElement>) => void
+  onToggle: () => void
+}) {
   const s = useAppStore()
   const { doc, selection } = s
   const display = getDisplayAngles(s)
@@ -21,7 +92,8 @@ export function PatternInset() {
   }
 
   return (
-    <div className="inset">
+    <div ref={rootRef} className="inset" style={{ width }}>
+      <div className="inset-grip" onPointerDown={onGripDown} title="Drag to resize" />
       <svg viewBox={viewBox} style={{ width: '100%', display: 'block' }}>
         {doc.faces.map((f) => {
           const pts = f.vertexIds
@@ -85,7 +157,9 @@ export function PatternInset() {
             )
           })}
       </svg>
-      <div className="inset-label">2D pattern</div>
+      <button className="inset-label inset-head" title="Collapse 2D pattern" onClick={onToggle}>
+        <span className="chev open">▸</span> 2D pattern
+      </button>
     </div>
   )
 }
