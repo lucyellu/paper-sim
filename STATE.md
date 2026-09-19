@@ -5,14 +5,14 @@
 
 **Status:** v0 + v0.5 + v1 slices complete and verified — app in `app/`, run with `cd app && npm run dev`
 **Repo:** https://github.com/lucyellu/paper-sim (branch `main`)
-**Last updated:** 2026-07-12
+**Last updated:** 2026-09-18
 
 ## Picking up in a new session
 
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs`
    Product direction lives in `VISION.md` (pillars, product ladder, what's parked).
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
@@ -263,7 +263,29 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 
 *(newest first)*
 
-- **2026-07-12 (latest)** — **Flat-mode rework + carton/gizmo/flicker fixes** (user, from screenshots:
+- **2026-09-18 (latest)** — **Carton from photo** (`BRIEF-photo-to-carton.md` steps 1–7; stretch
+  goals not started). File → **Carton from photo…** opens `ui/PhotoCartonDialog.tsx`: the user
+  clicks 8 corners on ONE carton in a 3/4-view picture (body "Y": bottom three L→R, top three L→R,
+  then the two ridge ends above the front roof). Points stay draggable. The 9th point, the side
+  gable peak, starts on the ridge end over the side (geometrically it sits there) and is drawn as a
+  pink ring you can grab. Front = wider face by default, with a Left/Right toggle. Pure math is in
+  `model/photoUnwarp.ts`: an 8×8 DLT homography with bilinear sampling unwarps the front face into
+  the front+back body panels, the side face into both sides, and the front roof quad into both
+  roofs. The side gable triangle is affine-warped into the gusset center triangles. Ribs and
+  outer gusset triangles use the roof's median border color. Bottom and glue flaps are solid,
+  using the median of the adjacent body edge (a stretched row printed as streaks). Every panel
+  bleeds 2 mm (4-neighbour dilation). The quads are inset 1.2% to trim dark silhouette outlines.
+  The output is one image covering `sheetBounds` exactly (row 0 = sheet max.y, confirmed in 3D),
+  set as `material.overlayImage` (JPEG, 60 px/cm). Dims come from click proportions (foreshortening
+  ignored on purpose). By default they're the largest size that fits one landscape Letter page
+  (`fitLetterDims`, mirrors `dielinePDFTrueScale`'s margins), with presets for Fit Letter and
+  250 mL mini, and a warning if the sheet would tile. `resolveDims` is now exported from `gable.ts`.
+  `scripts/verify-v12.mjs` drives the real file chooser with the local-only Pinterest test image
+  and 8 scripted clicks on the top-left carton, then checks: gable doc, sane dims, overlay
+  front/back/side/roof/flap regions not background black, 3 fold steps, true-scale PDF = 1
+  Letter page. Shots: `v12-wizard`, `v12-flat`, `v12-folded`, `v12-folded-upright`. The top-left
+  carton builds at 8.1 × 4.0 × 11.7 cm (sheet 25.4 × 17.8 cm). Still open: a physical print + fold.
+- **2026-07-12** — **Flat-mode rework + carton/gizmo/flicker fixes** (user, from screenshots:
   a rotated model shrank to a size they couldn't scale back; square-base carton felt the same as
   the tall one — wanted a real shorter 250 mL; selecting per-panel UV islands as the *default* in
   "UV mode" was confusing and not print-faithful; wanted **artwork-first** placement with an

@@ -21,6 +21,7 @@ import {
 import { materialNeedsTexture } from '../viewer/texture'
 import { analyzeDielineImage, type DielineImageAnalysis } from '../model/dielineImage'
 import { ImportDielineDialog } from './ImportDielineDialog'
+import { PhotoCartonDialog } from './PhotoCartonDialog'
 import { exportMesh, type MeshFormat, type MeshPose } from './meshExport'
 
 interface MenuItemDef {
@@ -85,12 +86,14 @@ export function TopBar() {
   const s = useAppStore()
   const fileInput = useRef<HTMLInputElement>(null)
   const imageInput = useRef<HTMLInputElement>(null)
+  const photoInput = useRef<HTMLInputElement>(null)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [importDialog, setImportDialog] = useState<{
     dataUrl: string
     fileName: string
     analysis: DielineImageAnalysis
   } | null>(null)
+  const [photoDialog, setPhotoDialog] = useState<{ dataUrl: string; fileName: string } | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
   // Click-away closes any open menu.
@@ -115,6 +118,17 @@ export function TopBar() {
       const dataUrl = await fileToDataUrl(file)
       const analysis = await analyzeDielineImage(dataUrl)
       setImportDialog({ dataUrl, fileName: file.name, analysis })
+    } catch (err) {
+      alert(`Could not read image: ${err instanceof Error ? err.message : err}`)
+    }
+  }
+
+  async function onPhotoImage(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      setPhotoDialog({ dataUrl: await fileToDataUrl(file), fileName: file.name })
     } catch (err) {
       alert(`Could not read image: ${err instanceof Error ? err.message : err}`)
     }
@@ -175,6 +189,12 @@ export function TopBar() {
       title:
         'Measure a flat dieline picture (jpg/png), rebuild the carton at its proportions, and register the artwork onto it',
       onClick: () => imageInput.current?.click(),
+    },
+    {
+      label: 'Carton from photo…',
+      title:
+        'Click the corners of a milk carton in a 3/4-view picture — its faces are unwarped onto a foldable, true-scale gable carton',
+      onClick: () => photoInput.current?.click(),
     },
     { label: '', separator: true },
     { label: 'Open…', onClick: () => fileInput.current?.click(), title: 'Open a PaperSim or FOLD file' },
@@ -346,6 +366,21 @@ export function TopBar() {
         style={{ display: 'none' }}
         onChange={onImportImage}
       />
+      <input
+        ref={photoInput}
+        type="file"
+        accept="image/*"
+        data-testid="photo-input"
+        style={{ display: 'none' }}
+        onChange={onPhotoImage}
+      />
+      {photoDialog && (
+        <PhotoCartonDialog
+          dataUrl={photoDialog.dataUrl}
+          fileName={photoDialog.fileName}
+          onClose={() => setPhotoDialog(null)}
+        />
+      )}
       {importDialog && (
         <ImportDielineDialog
           dataUrl={importDialog.dataUrl}

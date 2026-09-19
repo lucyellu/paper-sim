@@ -1261,3 +1261,57 @@ button.step-num {
 .import-dim-primary span {
   font-weight: 600;
 }
+
+/* ---- Carton-from-photo wizard ---- */
+.modal.photo-modal {
+  width: min(1120px, 96vw);
+}
+.photo-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.photo-left {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.photo-right {
+  flex: 1 1 280px;
+  min-width: 260px;
+}
+.photo-prompt {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.photo-canvas {
+  display: block;
+  max-width: 100%;
+  border-radius: 6px;
+  cursor: crosshair;
+  touch-action: none;
+  background: #000;
+}
+.photo-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8rem;
+  margin: 8px 0;
+}
+.photo-field .seg {
+  display: flex;
+  gap: 4px;
+}
+.photo-dims {
+  grid-template-columns: repeat(3, 1fr);
+}
+.photo-preview {
+  width: 100%;
+  height: auto;
+}
+.photo-warn {
+  color: #c2410c;
+  font-weight: 600;
+}

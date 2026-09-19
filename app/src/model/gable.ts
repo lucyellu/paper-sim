@@ -46,7 +46,7 @@ export function defaultGableDims(): GableDims {
 
 type P3 = [number, number, number]
 
-interface Dims {
+export interface Dims {
   W: number
   D: number
   H: number
@@ -60,7 +60,7 @@ interface Dims {
   PEAK: number
 }
 
-function resolveDims(d: GableDims): Dims {
+export function resolveDims(d: GableDims): Dims {
   const W = d.width
   const D = d.depth
   const H = d.height
