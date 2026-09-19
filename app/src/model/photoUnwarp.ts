@@ -9,7 +9,9 @@
 //
 // Pure math on plain RGBA buffers (no DOM), so it is testable anywhere.
 
+import { bleedPixels } from './bleed'
 import { resolveDims, type GableDims } from './gable'
+import { LETTER_LANDSCAPE, fitsOneLetterPage } from './printFit'
 
 export interface Pt {
   x: number
@@ -239,39 +241,9 @@ export function medianBorderColor(img: RGBAImage, rect: PxRect): RGB {
   }) as RGB
 }
 
-/**
- * Grow painted pixels outward by `radius` px into unpainted ones (each step
- * copies a painted 4-neighbour), so a slightly-off cut never shows white.
- */
+/** Grow painted pixels outward by `radius` px into unpainted ones (print bleed). */
 export function bleed(img: RGBAImage, mask: Uint8Array, radius: number) {
-  const { width: w, height: h, data } = img
-  const offs = [-1, 1, -w, w]
-  for (let step = 0; step < radius; step++) {
-    const grown: number[] = []
-    for (let j = 0; j < h; j++) {
-      for (let i = 0; i < w; i++) {
-        const k = j * w + i
-        if (mask[k]) continue
-        for (const o of offs) {
-          if ((o === -1 && i === 0) || (o === 1 && i === w - 1)) continue
-          const n = k + o
-          if (n < 0 || n >= w * h || !mask[n]) continue
-          grown.push(k, n)
-          break
-        }
-      }
-    }
-    if (grown.length === 0) break
-    for (let g = 0; g < grown.length; g += 2) {
-      const k = grown[g]
-      const n = grown[g + 1]
-      data[k * 4] = data[n * 4]
-      data[k * 4 + 1] = data[n * 4 + 1]
-      data[k * 4 + 2] = data[n * 4 + 2]
-      data[k * 4 + 3] = 255
-      mask[k] = 1
-    }
-  }
+  mask.set(bleedPixels(img.data, img.width, img.height, mask, radius))
 }
 
 // ---------------------------------------------------------------------------
@@ -394,19 +366,10 @@ export function sheetSizeCm(dims: GableDims): { w: number; h: number } {
   return { w: 2 * d.W + 2 * d.D + d.GLUE, h: Math.max(d.BOT_FB, d.BOT_LR) + d.H + d.G + d.R }
 }
 
-// Mirrors dielinePDFTrueScale's single-page layout on US Letter (ui/exports.ts):
-// 24 pt margins, a 26 pt footer, 0.25 cm padding around the sheet.
-const CM = 72 / 2.54
-const LETTER_LANDSCAPE = { w: (792 - 48) / CM - 0.5, h: (612 - 48 - 26) / CM - 0.5 }
-const LETTER_PORTRAIT = { w: (612 - 48) / CM - 0.5, h: (792 - 48 - 26) / CM - 0.5 }
-
 /** True when the true-scale PDF fits on ONE Letter page (either orientation). */
 export function fitsLetter(dims: GableDims): boolean {
   const s = sheetSizeCm(dims)
-  return (
-    (s.w <= LETTER_LANDSCAPE.w && s.h <= LETTER_LANDSCAPE.h) ||
-    (s.w <= LETTER_PORTRAIT.w && s.h <= LETTER_PORTRAIT.h)
-  )
+  return fitsOneLetterPage(s.w, s.h)
 }
 
 /** The largest carton at these proportions that prints on one landscape Letter page. */

@@ -19,8 +19,7 @@ import {
   openInstructionSheet,
 } from './exports'
 import { materialNeedsTexture } from '../viewer/texture'
-import { analyzeDielineImage, type DielineImageAnalysis } from '../model/dielineImage'
-import { ImportDielineDialog } from './ImportDielineDialog'
+import { FitDielineDialog, type FitDielineProps } from './FitDielineDialog'
 import { PhotoCartonDialog } from './PhotoCartonDialog'
 import { exportMesh, type MeshFormat, type MeshPose } from './meshExport'
 
@@ -88,11 +87,7 @@ export function TopBar() {
   const imageInput = useRef<HTMLInputElement>(null)
   const photoInput = useRef<HTMLInputElement>(null)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
-  const [importDialog, setImportDialog] = useState<{
-    dataUrl: string
-    fileName: string
-    analysis: DielineImageAnalysis
-  } | null>(null)
+  const [fitDialog, setFitDialog] = useState<Pick<FitDielineProps, 'source' | 'session'> | null>(null)
   const [photoDialog, setPhotoDialog] = useState<{ dataUrl: string; fileName: string } | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
@@ -115,9 +110,7 @@ export function TopBar() {
     e.target.value = ''
     if (!file) return
     try {
-      const dataUrl = await fileToDataUrl(file)
-      const analysis = await analyzeDielineImage(dataUrl)
-      setImportDialog({ dataUrl, fileName: file.name, analysis })
+      setFitDialog({ source: { dataUrl: await fileToDataUrl(file), fileName: file.name } })
     } catch (err) {
       alert(`Could not read image: ${err instanceof Error ? err.message : err}`)
     }
@@ -157,7 +150,17 @@ export function TopBar() {
   }
 
   const fileItems: MenuItemDef[] = [
-    { label: 'New — Tuck box', onClick: () => newDoc('tuck', 'tuck box') },
+    {
+      label: 'New — Tuck box (reverse tuck)',
+      title: 'Parametric tuck-end box: lids on opposite panels, dust flaps on the sides (units = cm)',
+      onClick: () => newDoc('tuckbox', 'tuck box', { width: 6, depth: 3, height: 9, style: 'reverse', order: 'front-first', glueSide: 'right' }),
+    },
+    {
+      label: 'New — Tuck box (straight tuck)',
+      title: 'Parametric tuck-end box with both lids on the same panel (units = cm)',
+      onClick: () => newDoc('tuckbox', 'tuck box', { width: 6, depth: 3, height: 9, style: 'straight', order: 'front-first', glueSide: 'right' }),
+    },
+    { label: 'New — Flap box (classic)', title: 'The original fixed-size box with four top and bottom flaps', onClick: () => newDoc('tuck', 'flap box') },
     {
       label: 'New — Milk carton — 1 L (tall)',
       title:
@@ -187,8 +190,14 @@ export function TopBar() {
     {
       label: 'Import dieline image…',
       title:
-        'Measure a flat dieline picture (jpg/png), rebuild the carton at its proportions, and register the artwork onto it',
+        'Fit a flat dieline picture (jpg/png): crop/rotate, pick the box type, drag the fold grid onto it, size it for print — the artwork is registered onto a foldable box',
       onClick: () => imageInput.current?.click(),
+    },
+    {
+      label: 'Re-fit dieline image…',
+      title: 'Reopen the last dieline fit (same picture and guides) to adjust it',
+      disabled: !s.fitSession,
+      onClick: () => s.fitSession && setFitDialog({ session: s.fitSession }),
     },
     {
       label: 'Carton from photo…',
@@ -381,14 +390,7 @@ export function TopBar() {
           onClose={() => setPhotoDialog(null)}
         />
       )}
-      {importDialog && (
-        <ImportDielineDialog
-          dataUrl={importDialog.dataUrl}
-          fileName={importDialog.fileName}
-          analysis={importDialog.analysis}
-          onClose={() => setImportDialog(null)}
-        />
-      )}
+      {fitDialog && <FitDielineDialog {...fitDialog} onClose={() => setFitDialog(null)} />}
     </div>
   )
 }

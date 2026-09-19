@@ -731,6 +731,25 @@ function BackdropInspector() {
     s.setBackdrop({ ...bg, ...r })
   }
 
+  /** Print the backdrop exactly where it sits: register it as the design overlay. */
+  function useAsArtwork() {
+    if (!bg) return
+    const { min, max } = sheetBounds(s.doc)
+    const sw = Math.max(max.x - min.x, 0.001)
+    const sh = Math.max(max.y - min.y, 0.001)
+    s.setMaterial({
+      ...s.material,
+      overlayImage: bg.image,
+      overlayTransform: {
+        offsetX: (bg.x - min.x) / sw,
+        offsetY: (max.y - bg.y) / sh,
+        scaleX: bg.w / sw,
+        scaleY: bg.h / sh,
+        rotationDeg: 0,
+      },
+    })
+  }
+
   return (
     <div className="pe-inspector tex-inspector">
       <h4>Trace backdrop</h4>
@@ -768,9 +787,19 @@ function BackdropInspector() {
               onChange={(e) => s.setBackdrop({ ...bg, opacity: Number(e.target.value) })}
             />
           </label>
+          <div className="btn-row">
+            <button
+              data-testid="backdrop-as-art"
+              title="Register this picture as the printed design, exactly where it sits on the sheet"
+              onClick={useAsArtwork}
+            >
+              Use backdrop as artwork
+            </button>
+          </div>
           <p className="pe-hint" style={{ position: 'static' }}>
             Drag the image to line it up, then trace with Draw crease / Draw cut. Not saved in the
-            file.
+            file. When the tracing is done, “Use backdrop as artwork” prints the picture with it
+            (the art is pinned to the sheet’s current size, so do it last).
           </p>
         </>
       ) : (

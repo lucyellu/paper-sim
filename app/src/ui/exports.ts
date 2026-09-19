@@ -3,6 +3,7 @@
 // project bundle (zip with the .fold, dieline, model snapshot, instructions).
 
 import { sheetBounds, type PaperDoc } from '../model/document'
+import { foldedExtents } from '../model/fold'
 import { toFoldFile } from '../model/foldfile'
 import type { MaterialSettings } from '../model/material'
 import { nextExportName, slugify } from '../model/naming'
@@ -10,7 +11,7 @@ import type { Step } from '../model/ops'
 import { getDisplayAngles, type AppState } from '../state/store'
 import { captureAvailable, capturePoses } from '../viewer/capture'
 import type { UVEdits } from '../model/uv'
-import { buildPrintCanvas, loadImage, materialNeedsTexture } from '../viewer/texture'
+import { buildPrintCanvas, loadImage, materialNeedsTexture, PRINT_TEX } from '../viewer/texture'
 import { Pdf, type RGB } from './pdf'
 import { buildZip, dataUrlBytes, type ZipEntry } from './zip'
 
@@ -239,10 +240,30 @@ export async function dielinePDFTrueScale(
 
   const pdf = new Pdf()
   let artIdx = -1
+  let artPxPerCm = 0
   if (material) {
-    const art = canvasToJpeg(await buildPrintCanvas(doc, material, uvEdits))
+    const canvas = await buildPrintCanvas(doc, material, uvEdits, PRINT_TEX)
+    const art = canvasToJpeg(canvas)
     artIdx = pdf.addImage(art.bytes, art.w, art.h)
+    artPxPerCm = canvas.width / (max.x - min.x)
+    if (material.overlayImage) {
+      // The design image itself may be the resolution limit.
+      const img = await loadImage(material.overlayImage).catch(() => null)
+      const span = (max.x - min.x) * (material.overlayTransform?.scaleX ?? 1)
+      if (img && span > 0) artPxPerCm = Math.min(artPxPerCm, img.width / span)
+    }
   }
+  const folded = foldedExtents(doc)
+  const specs = [
+    folded
+      ? `folds to ~${folded.width.toFixed(1)} × ${folded.depth.toFixed(1)} × ${folded.height.toFixed(1)} cm`
+      : null,
+    `sheet ${(max.x - min.x).toFixed(1)} × ${(max.y - min.y).toFixed(1)} cm`,
+    artPxPerCm > 0 ? `art ~${Math.round(artPxPerCm * 2.54)} dpi` : null,
+    'cut solid lines, score dashed lines',
+  ]
+    .filter(Boolean)
+    .join(' · ')
   const pos = (id: number) => doc.vertices.find((v) => v.id === id)!.pos
 
   for (let r = 0; r < lay.rows; r++) {
@@ -291,6 +312,7 @@ export async function dielinePDFTrueScale(
       pdf.text(m, m + 6, 8, `${title} — dieline · TRUE SCALE (1 unit = 1 cm) · print at 100% on US Letter, no fit-to-page${tile}`, {
         color: PDF_MUTED,
       })
+      pdf.text(m, m + 16, 8, specs, { color: PDF_MUTED })
       if (r === 0 && c === 0) {
         // 5 cm calibration bar, right-aligned in the footer.
         const barW = 5 * CM_TO_PT
@@ -396,6 +418,10 @@ export function buildInstructionSheetHTML(
   const poses = [{}, ...steps.map((st) => st.angles)]
   const images = capturePoses(poses)
   const svg = dielineSVG(doc, artwork)
+  const folded = foldedExtents(doc)
+  const size = folded
+    ? `Folds to about ${folded.width.toFixed(1)} × ${folded.depth.toFixed(1)} × ${folded.height.toFixed(1)} cm. `
+    : ''
 
   const cards = images
     .map((url, i) => {
@@ -432,6 +458,7 @@ export function buildInstructionSheetHTML(
   <h1>${escapeHtml(title)}</h1>
   <h2>Dieline</h2>
   <p class="legend"><b>solid</b> = cut &nbsp;·&nbsp; <b style="color:#2563eb">dashed blue</b> = valley fold &nbsp;·&nbsp; <b style="color:#dc2626">dashed red</b> = mountain fold</p>
+  <p class="legend">${size}Print the true-scale PDF at 100% (no fit-to-page), cut the solid lines, score the dashed ones.</p>
   <div class="dieline">${svg}</div>
   <h2>Folding steps</h2>
   <div class="steps">

@@ -109,7 +109,15 @@ Everything shipped is tracked in `STATE.md`. The current build order:
 
 1. ✅ Trustworthy transforms (edge-ring reshape fix)
 2. ✅ True-scale printing on US Letter (1 unit = 1 cm, calibration bar, tiling)
-3. ✅ Image → dieline wizard (raster dieline → matched template + registered art)
+3. ✅ Image → dieline wizard (raster dieline → matched template + registered art),
+   now **fit-the-grid**: crop/rotate a Pinterest pin, pick the box archetype, drag its
+   fold grid onto the picture, print one true-scale Letter page. **How "any dieline"
+   grows: the archetype registry** (`app/src/model/archetypes.ts`). Each box type is
+   one module entry (parametric builder + fit guides + guides→params), and the wizard
+   never changes. Today: tuck-end box and gable carton. Next in line: egg carton, pillow
+   box, cup carrier, hexagon box, mini vending machine. Until one exists, the
+   trace-anything path (trace the picture, then "Use backdrop as artwork") prints any
+   shape.
 4. ✅ Sleeve templates (can + juice box)
 5. 🔜 **Physical validation loop** — print a sleeve and a carton, fold them,
    feed what's wrong back into the templates (clearances, line weights, glue

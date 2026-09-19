@@ -1315,3 +1315,24 @@ button.step-num {
   color: #c2410c;
   font-weight: 600;
 }
+
+/* ---- Fit-the-grid dieline wizard ---- */
+.fit-canvas {
+  background: #fff;
+}
+.fit-field {
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+.fit-field > span {
+  min-width: 72px;
+}
+.fit-field .seg {
+  flex-wrap: wrap;
+}
+.fit-dims {
+  grid-template-columns: repeat(2, 1fr);
+}
+.fit-modal .btn-row button {
+  white-space: nowrap;
+}

@@ -3,6 +3,8 @@ import { buildCarton } from '../model/carton'
 import { buildGableCarton, type GableDims } from '../model/gable'
 import { buildCan, type CanDims } from '../model/can'
 import { buildSleeve, type SleeveDims } from '../model/sleeve'
+import { buildTuckBox, type TuckParams } from '../model/tuck'
+import type { FitSession } from '../model/dielineFit'
 import { buildPanelTree, type PanelTree, type PaperDoc } from '../model/document'
 import { fromFoldFile, toFoldFile } from '../model/foldfile'
 import {
@@ -51,9 +53,10 @@ export interface Backdrop {
   h: number
   opacity: number
 }
-export type Template = 'tuck' | 'gable' | 'can' | 'sleeve'
+/** 'tuck' = the legacy fixed-size flap box; 'tuckbox' = the parametric tuck-end box. */
+export type Template = 'tuck' | 'tuckbox' | 'gable' | 'can' | 'sleeve'
 /** Optional dimensions when creating a template (rectangular gable, can, sleeve size). */
-export type TemplateDims = GableDims | CanDims | SleeveDims
+export type TemplateDims = GableDims | CanDims | SleeveDims | TuckParams
 /** Which component the pointer selects in the 3D view (Maya-style). */
 export type SelectMode = 'object' | 'face' | 'edge'
 /** Active manipulator (Maya Q/W/E/R): none, translate, rotate, scale. */
@@ -99,6 +102,11 @@ export interface AppState {
   uvEdits: UVEdits
   /** Tracing reference behind the dieline editor (session-only). */
   backdrop: Backdrop | null
+  /**
+   * The last dieline-image fit (image, crop, guides) — session-only, so
+   * File → Re-fit can reopen the wizard after checking the 3D fold.
+   */
+  fitSession: FitSession | null
 
   dispatch: (op: Op, opts?: { alreadyApplied?: boolean }) => void
   setAngleTransient: (edgeId: number, deg: number) => void
@@ -157,6 +165,7 @@ export interface AppState {
   resetTransform: () => void
   setMaterial: (material: MaterialSettings) => void
   setBackdrop: (backdrop: Backdrop | null) => void
+  setFitSession: (fitSession: FitSession | null) => void
   newDocument: (template?: Template, dims?: TemplateDims) => void
   saveFile: () => void
   loadFile: (json: unknown, fileName: string) => void
@@ -166,6 +175,7 @@ function buildTemplate(template: Template, dims?: TemplateDims): PaperDoc {
   if (template === 'gable') return buildGableCarton(dims as GableDims | undefined)
   if (template === 'can') return buildCan(dims as CanDims | undefined)
   if (template === 'sleeve') return buildSleeve(dims as SleeveDims | undefined)
+  if (template === 'tuckbox') return buildTuckBox(dims as TuckParams | undefined)
   return buildCarton()
 }
 
@@ -255,6 +265,7 @@ export const useAppStore = create<AppState>((set, get) => {
     material: defaultMaterial(),
     uvEdits: {},
     backdrop: null,
+    fitSession: null,
 
     dispatch: (op, opts) => {
       const s = get()
@@ -543,6 +554,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setMaterial: (material) => set({ material }),
     setBackdrop: (backdrop) => set({ backdrop }),
+    setFitSession: (fitSession) => set({ fitSession }),
 
     newDocument: (template = 'tuck', dims) => {
       const doc = buildTemplate(template, dims)

@@ -41,6 +41,13 @@ export interface DielineImageAnalysis {
   hBody: { bottom: number; top: number } | null
   /** Gable corner/ridge line row, when found (between shoulder and top). */
   hCorner: number | null
+  /**
+   * Candidate fold/cut line positions (strongest first-filtered, then sorted
+   * by position) for other archetypes' fit guesses: interior vertical lines
+   * across the body band, horizontal lines across the whole drawing.
+   */
+  vCandidates: number[]
+  hCandidates: number[]
   ratios: GableRatios | null
   /**
    * good  = wall widths repeat consistently (W D W D) — trust the numbers;
@@ -83,11 +90,16 @@ export function analyzeImageData(id: ImageData): DielineImageAnalysis {
     vLines: [],
     hBody: null,
     hCorner: null,
+    vCandidates,
+    hCandidates,
     ratios: null,
     confidence: 'none',
     overlay,
   })
   const identity: OverlayTransform = { offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1, rotationDeg: 0 }
+  // Filled in as they are found; early exits still report what they have.
+  let vCandidates: number[] = []
+  let hCandidates: number[] = []
 
   // ---- 1. Foreground mask: transparency if present, else border-color diff.
   let borderTransparent = 0
@@ -172,6 +184,19 @@ export function analyzeImageData(id: ImageData): DielineImageAnalysis {
     rotationDeg: 0,
   }
 
+  // Horizontal line candidates across the full drawing width.
+  {
+    const e = new Float32Array(H)
+    for (let y = by0 + 1; y < by1; y++) {
+      for (let x = bx0; x <= bx1; x++) {
+        if (mask[(y - 1) * W + x] && mask[(y + 1) * W + x]) e[y] += Math.abs(lum[(y + 1) * W + x] - lum[(y - 1) * W + x])
+      }
+    }
+    const peaks = findPeaks(e, by0 + 2, by1 - 2, Math.max(3, content.h * 0.015))
+    peaks.sort((a, b) => b.e - a.e)
+    hCandidates = peaks.slice(0, 16).map((p) => p.x).sort((a, b) => a - b)
+  }
+
   // ---- 3. Body band = the rows where the drawing spans (nearly) full width.
   const cov = new Int32Array(H)
   for (let y = by0; y <= by1; y++) {
@@ -205,6 +230,7 @@ export function analyzeImageData(id: ImageData): DielineImageAnalysis {
   inner.sort((a, b) => b.e - a.e)
   const candidates = inner.slice(0, 12).map((p) => p.x)
   candidates.sort((a, b) => a - b)
+  vCandidates = candidates
   if (candidates.length < 4) return none(content, overlay)
 
   // Choose the 4 lines splitting the box into the most W-D-W-D-like columns.
@@ -313,6 +339,8 @@ export function analyzeImageData(id: ImageData): DielineImageAnalysis {
     vLines: best.lines,
     hBody,
     hCorner,
+    vCandidates,
+    hCandidates,
     ratios: {
       width: wPx / hPx,
       depth: dPx / hPx,

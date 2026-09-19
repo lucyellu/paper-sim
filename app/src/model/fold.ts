@@ -4,7 +4,7 @@
 // viewer rotates the whole model into y-up world space.
 
 import * as THREE from 'three'
-import type { PanelTree, PaperDoc } from './document'
+import { buildPanelTree, type PanelTree, type PaperDoc } from './document'
 
 export type AngleMap = Record<number, number> // hinge edge id -> radians
 
@@ -51,4 +51,31 @@ export function degToRad(deg: number): number {
 
 export function radToDeg(rad: number): number {
   return (rad * 180) / Math.PI
+}
+
+/**
+ * Size of the folded object at its authored target pose (flat frame: x/y are
+ * the root panel's width/height, z the depth folded up from it). Null when the
+ * doc has no targets.
+ */
+export function foldedExtents(doc: PaperDoc): { width: number; height: number; depth: number } | null {
+  if (!doc.targetAngles || Object.keys(doc.targetAngles).length === 0) return null
+  const angles: AngleMap = {}
+  for (const [e, deg] of Object.entries(doc.targetAngles)) angles[Number(e)] = degToRad(deg)
+  const mats = computeFaceMatrices(doc, buildPanelTree(doc), angles)
+  const pos = new Map(doc.vertices.map((v) => [v.id, v.pos]))
+  const lo = new THREE.Vector3(Infinity, Infinity, Infinity)
+  const hi = new THREE.Vector3(-Infinity, -Infinity, -Infinity)
+  const p = new THREE.Vector3()
+  for (const f of doc.faces) {
+    const m = mats.get(f.id)
+    if (!m) continue
+    for (const vid of f.vertexIds) {
+      const q = pos.get(vid)!
+      p.set(q.x, q.y, 0).applyMatrix4(m)
+      lo.min(p)
+      hi.max(p)
+    }
+  }
+  return { width: hi.x - lo.x, height: hi.y - lo.y, depth: hi.z - lo.z }
 }

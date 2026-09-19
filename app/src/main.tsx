@@ -8,6 +8,7 @@ import { buildCarton } from './model/carton'
 import { buildGableCarton } from './model/gable'
 import { buildCan } from './model/can'
 import { buildSleeve } from './model/sleeve'
+import { buildTuckBox } from './model/tuck'
 import {
   buildPanelTree,
   columnFaceIds,
@@ -48,6 +49,7 @@ if (import.meta.env.DEV) {
     buildGableCarton,
     buildCan,
     buildSleeve,
+    buildTuckBox,
     buildPanelTree,
     computeFaceMatrices,
     degToRad,

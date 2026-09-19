@@ -12,7 +12,7 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs && node scripts/verify-v13.mjs`
    Product direction lives in `VISION.md` (pillars, product ladder, what's parked).
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
@@ -263,7 +263,63 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 
 *(newest first)*
 
-- **2026-09-18 (latest)** — **Carton from photo** (`BRIEF-photo-to-carton.md` steps 1–7; stretch
+- **2026-09-18 (latest)** — **Fit-the-grid dieline importer + tuck boxes**
+  (`BRIEF-dieline-to-fold.md`). File → **Import dieline image…** is now
+  `ui/FitDielineDialog.tsx`, which replaces `ImportDielineDialog`. It has two screens.
+  **Prep**: rotate ±90°, flip, drag-crop; the result is baked to a new PNG and every
+  later step uses it. **Fit**: pick the archetype and layout toggles, drag the
+  column/row guide lines (orange/teal) while the archetype's real outline (cut solid,
+  crease dashed) is drawn over the picture. ● moves the whole grid, ■ scales it. The
+  size is one body-height input with presets **Fit one Letter page** and **Sharpest
+  print** (≥150 dpi). A live summary shows box size, sheet size, page fit and print dpi,
+  warning below 150; a separate warning appears when the picture's matching panels
+  differ by more than 8%. **Build**: newDocument + overlay registered through the same
+  guides. **File → Re-fit dieline image…** reopens the session (`store.fitSession`,
+  session-only).
+  - `model/tuck.ts`: parametric tuck-end box `buildTuckBox({width, depth, height, lid?,
+    tuck?, dust?, glue?, style: straight|reverse, order: front-first|side-first,
+    glueSide, lidOn: first|second})`. `lidOn` is an extra param beyond the brief: the
+    picture's top lid can be on either wide panel. The lid is height = depth; the tuck
+    has chamfered corners; dust flaps are tapered and capped at 0.45·W so opposite
+    flaps never overlap; the glue flap is tapered. Targets come from the sealed 3D pose
+    → `deriveTargetAngles`. New template `'tuckbox'` with 5 fold steps. The legacy
+    `'tuck'` template (fixed `buildCarton`) is untouched because many old verify
+    scripts depend on its face names. It's relabelled "New — Flap box (classic)". New
+    File entries: "Tuck box (reverse / straight tuck)".
+  - `model/archetypes.ts`: registry `{tuck, gable}`. Each entry has builder, guides(p),
+    fromGuides(g) → {params, mismatch}, layout options, template. Contract: x-guide
+    `c0` = flat 0, y-guides `body0` = 0 and `bodyH` = H (the wizard anchors on these).
+    Adding a box type = one entry here.
+  - `model/dielineFit.ts`: image px ↔ flat cm (uniform scale from the body height,
+    anchored at c0/body0), `overlayForFit` (the OverlayTransform), dpi, `fitLetterHeight`
+    (binary search on the built sheet), and the initial guess `initialFit`. The guess
+    uses the analyzer's new `vCandidates`/`hCandidates`. It picks 5 body lines + glue so
+    columns repeat, penalised when the flap band just above/below a column is half
+    covered (art edges can fake a repeating grid), plus width left unexplained (e.g. a
+    watermark). Lid placement/style is read from which wide panel has a flap. The
+    foreground mask threshold is 24 because pastel flaps on cream differ by ~35. Results:
+    #126, #118, #107 fully right (columns, rows, all four layout toggles). #83 (rotated)
+    and the gable pins need hand-dragging. The gable/tuck auto-pick misses #110, whose
+    art isn't column-aligned.
+  - Print: `buildPrintCanvas` bleeds art 2 mm past the union of faces (`model/bleed.ts`,
+    O(n) nearest-seed propagation) and blanks everything further out to paper. The
+    true-scale PDF renders at `PRINT_TEX` 4096 px (other exports stay at 2048). Its
+    footer's second line: "folds to ~W × D × H cm · sheet · art ~N dpi · cut solid lines,
+    score dashed lines" (`foldedExtents` in fold.ts). The instruction sheet gets the
+    size + print line too.
+  - Trace-anything: the dieline editor's Trace panel has **Use backdrop as artwork**
+    (registers the backdrop rect as the overlay).
+  - `verify-v13.mjs`: (1) 16 tuck variants fold to exactly W×H×D with no
+    interpenetration or same-kind stacking; the detector self-tests on pierced/stacked
+    squares. (2) #126 through the real menu: guess checked, guides dragged to measured
+    positions, params, texture↔picture registration at 3 points, bleed, 5 steps,
+    1-page PDF + footer, Re-fit. (2b) #118 (auto layout must be
+    side-first/glue-left/straight) and #107 (pure auto-guess). (3) #110 as a gable
+    regression. (4) backdrop → artwork. PDFs for #126/#118/#107 are written to
+    `print/` (gitignored) for the physical test.
+  - Still open: print + fold #126 and #118. Decorative cuts in pins (rounded tucks,
+    notches) become straight cuts, as the dialog hint says.
+- **2026-09-18** — **Carton from photo** (`BRIEF-photo-to-carton.md` steps 1–7; stretch
   goals not started). File → **Carton from photo…** opens `ui/PhotoCartonDialog.tsx`: the user
   clicks 8 corners on ONE carton in a 3/4-view picture (body "Y": bottom three L→R, top three L→R,
   then the two ridge ends above the front roof). Points stay draggable. The 9th point, the side

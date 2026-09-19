@@ -1,0 +1,234 @@
+// Box archetype registry: each printable box type is ONE module entry that
+// knows how to build itself, which fit guides the dieline-image wizard shows,
+// and how to turn dragged guide positions back into parameters. The wizard is
+// archetype-agnostic — adding the next box type (egg carton, pillow box…)
+// means adding an entry here, not touching the UI.
+//
+// Guide contract (the wizard anchors the image on these): every archetype has
+// x-guide 'c0' at flat x = 0, y-guide 'body0' at flat y = 0 and y-guide
+// 'bodyH' at the body height. All guide positions are flat cm, y up.
+
+import type { Template } from '../state/store'
+import type { PaperDoc } from './document'
+import { buildGableCarton, resolveDims, type GableDims } from './gable'
+import { buildTuckBox, resolveTuck, type TuckParams } from './tuck'
+
+export type ArchetypeId = 'tuck' | 'gable'
+
+export interface Guide {
+  id: string
+  label: string
+  pos: number
+}
+
+export interface GuideSet {
+  x: Guide[]
+  y: Guide[]
+}
+
+/** Guide positions by id, flat cm. */
+export interface GuidePositions {
+  x: Record<string, number>
+  y: Record<string, number>
+}
+
+/** A layout toggle shown in the wizard (e.g. glue side). */
+export interface ArchetypeOption {
+  key: string
+  label: string
+  choices: Array<{ value: string; label: string }>
+}
+
+export interface Archetype<P> {
+  id: ArchetypeId
+  label: string
+  /** Store template to build with (also picks the authored fold steps). */
+  template: Template
+  defaults: P
+  options: ArchetypeOption[]
+  optionsOf(p: P): Record<string, string>
+  withOptions(p: P, o: Record<string, string>): P
+  /** Which side the glue flap sits on for these params (drives column guessing). */
+  glueSide(p: P): 'left' | 'right'
+  /** Columns in flat order are wide-first (W D W D) vs narrow-first (D W D W). */
+  wideFirst(p: P): boolean
+  build(p: P): PaperDoc
+  guides(p: P): GuideSet
+  /**
+   * Inverse of guides(): positions → params, plus `mismatch` (0..1) — how far
+   * the picture's two wide / two narrow columns are from repeating.
+   */
+  fromGuides(g: GuidePositions, prev: P): { params: P; mismatch: number }
+}
+
+/** Column guide ids, flat order. */
+export const COLUMN_GUIDES = ['c0', 'c1', 'c2', 'c3', 'c4'] as const
+
+const COLUMN_LABELS = ['panel 1', '1 | 2', '2 | 3', '3 | 4', 'panel 4']
+
+function columnGuides(colX: number[], colW: number[]): Guide[] {
+  const xs = [...colX, colX[3] + colW[3]]
+  return xs.map((pos, i) => ({ id: COLUMN_GUIDES[i], label: COLUMN_LABELS[i], pos }))
+}
+
+/** Column widths from guide positions, plus the W/D repeat error. */
+function columnsFrom(g: GuidePositions, wideFirst: boolean) {
+  const c = COLUMN_GUIDES.map((id) => g.x[id])
+  const cols = [c[1] - c[0], c[2] - c[1], c[3] - c[2], c[4] - c[3]]
+  const [w1, w2] = wideFirst ? [cols[0], cols[2]] : [cols[1], cols[3]]
+  const [d1, d2] = wideFirst ? [cols[1], cols[3]] : [cols[0], cols[2]]
+  const rel = (a: number, b: number) => Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b), 1e-9)
+  return {
+    width: Math.max(0.1, (w1 + w2) / 2),
+    depth: Math.max(0.1, (d1 + d2) / 2),
+    left: c[0],
+    right: c[4],
+    mismatch: Math.max(rel(w1, w2), rel(d1, d2)),
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+const tuck: Archetype<TuckParams> = {
+  id: 'tuck',
+  label: 'Tuck-end box',
+  template: 'tuckbox',
+  defaults: { width: 6, depth: 3, height: 9, style: 'reverse', order: 'front-first', glueSide: 'right', lidOn: 'first' },
+  options: [
+    {
+      key: 'style',
+      label: 'Lids',
+      choices: [
+        { value: 'reverse', label: 'Reverse (opposite panels)' },
+        { value: 'straight', label: 'Straight (same panel)' },
+      ],
+    },
+    {
+      key: 'order',
+      label: 'First panel',
+      choices: [
+        { value: 'front-first', label: 'Wide' },
+        { value: 'side-first', label: 'Narrow' },
+      ],
+    },
+    {
+      key: 'lidOn',
+      label: 'Top lid on',
+      choices: [
+        { value: 'first', label: '1st wide panel' },
+        { value: 'second', label: '2nd wide panel' },
+      ],
+    },
+    {
+      key: 'glueSide',
+      label: 'Glue flap',
+      choices: [
+        { value: 'left', label: 'Left' },
+        { value: 'right', label: 'Right' },
+      ],
+    },
+  ],
+  optionsOf: (p) => ({ style: p.style, order: p.order, lidOn: p.lidOn ?? 'first', glueSide: p.glueSide }),
+  withOptions: (p, o) => ({
+    ...p,
+    style: (o.style ?? p.style) as TuckParams['style'],
+    order: (o.order ?? p.order) as TuckParams['order'],
+    lidOn: (o.lidOn ?? p.lidOn) as TuckParams['lidOn'],
+    glueSide: (o.glueSide ?? p.glueSide) as TuckParams['glueSide'],
+  }),
+  glueSide: (p) => p.glueSide,
+  wideFirst: (p) => p.order === 'front-first',
+  build: (p) => buildTuckBox(p),
+  guides(p) {
+    const r = resolveTuck(p)
+    const total = r.colX[3] + r.colW[3]
+    return {
+      x: [
+        ...columnGuides(r.colX, r.colW),
+        { id: 'glue', label: 'glue edge', pos: p.glueSide === 'right' ? total + r.GLUE : -r.GLUE },
+      ],
+      y: [
+        { id: 'botTuck', label: 'bottom tuck', pos: -(r.LID + r.TUCK) },
+        { id: 'body0', label: 'body bottom', pos: 0 },
+        { id: 'bodyH', label: 'body top', pos: r.H },
+        { id: 'topTuck', label: 'top tuck', pos: r.H + r.LID + r.TUCK },
+      ],
+    }
+  },
+  fromGuides(g, prev) {
+    const c = columnsFrom(g, prev.order === 'front-first')
+    const height = Math.max(0.1, g.y.bodyH - g.y.body0)
+    // Lids span the depth, so each tuck is what's left past lid = depth.
+    const top = g.y.topTuck - g.y.bodyH - c.depth
+    const bot = g.y.body0 - g.y.botTuck - c.depth
+    const glue = prev.glueSide === 'right' ? g.x.glue - c.right : c.left - g.x.glue
+    return {
+      params: {
+        ...prev,
+        width: c.width,
+        depth: c.depth,
+        height,
+        lid: undefined,
+        dust: undefined,
+        tuck: Math.max(0.3, (top + bot) / 2),
+        glue: Math.max(0.3, glue),
+      },
+      mismatch: c.mismatch,
+    }
+  },
+}
+
+const gable: Archetype<GableDims> = {
+  id: 'gable',
+  label: 'Gable-top carton',
+  template: 'gable',
+  defaults: { width: 5, depth: 3.2, height: 13, gable: 2.4, rib: 0.9, botFB: 2.2, botLR: 1.8, glue: 1.2 },
+  options: [],
+  optionsOf: () => ({}),
+  withOptions: (p) => p,
+  glueSide: () => 'right',
+  wideFirst: () => true,
+  build: (p) => buildGableCarton(p),
+  guides(p) {
+    const d = resolveDims(p)
+    const colX = [0, d.W, d.W + d.D, 2 * d.W + d.D]
+    const colW = [d.W, d.D, d.W, d.D]
+    return {
+      x: [...columnGuides(colX, colW), { id: 'glue', label: 'glue edge', pos: 2 * d.W + 2 * d.D + d.GLUE }],
+      y: [
+        { id: 'botFlap', label: 'bottom flaps', pos: -d.BOT_FB },
+        { id: 'body0', label: 'body bottom', pos: 0 },
+        { id: 'bodyH', label: 'body top', pos: d.H },
+        { id: 'gableTop', label: 'roof top', pos: d.H + d.G },
+        { id: 'ribTop', label: 'rib top', pos: d.H + d.G + d.R },
+      ],
+    }
+  },
+  fromGuides(g, prev) {
+    const c = columnsFrom(g, true)
+    const height = Math.max(0.1, g.y.bodyH - g.y.body0)
+    const botFB = Math.max(0.3, g.y.body0 - g.y.botFlap)
+    return {
+      params: {
+        ...prev,
+        width: c.width,
+        depth: c.depth,
+        height,
+        // The roof must reach the ridge: gable > depth / 2.
+        gable: Math.max(g.y.gableTop - g.y.bodyH, c.depth * 0.51 * 1.02),
+        rib: Math.max(0.2, g.y.ribTop - g.y.gableTop),
+        botFB,
+        botLR: botFB * (1.8 / 2.2),
+        glue: Math.max(0.3, g.x.glue - c.right),
+      },
+      mismatch: c.mismatch,
+    }
+  },
+}
+
+export const ARCHETYPES: Record<ArchetypeId, Archetype<unknown>> = {
+  tuck: tuck as Archetype<unknown>,
+  gable: gable as Archetype<unknown>,
+}
+
+export const ARCHETYPE_IDS = Object.keys(ARCHETYPES) as ArchetypeId[]

@@ -53,6 +53,16 @@ export function templateSteps(template: Template, doc: PaperDoc): Step[] {
       { name: 'Seal the gable top', match: /roof|rib|gusset/ },
     ])
   }
+  if (template === 'tuckbox') {
+    // Dust flaps first, then the lid over them with its tuck riding along.
+    return stagedSteps(doc, [
+      { name: 'Fold the body square', match: /^(right side|back|left side|glue flap)$/ },
+      { name: 'Bottom: dust flaps in', match: /bottom dust flap/ },
+      { name: 'Bottom: close the lid, tuck it in', match: /bottom (lid|tuck)/ },
+      { name: 'Top: dust flaps in', match: /top dust flap/ },
+      { name: 'Top: close the lid, tuck it in', match: /top (lid|tuck)/ },
+    ])
+  }
   return stagedSteps(doc, [
     { name: 'Fold the body square', match: /^(right side|back|left side|glue flap)$/ },
     { name: 'Close the bottom', match: /bottom flap/ },

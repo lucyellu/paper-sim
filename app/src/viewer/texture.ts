@@ -4,6 +4,7 @@
 // flat sheet bounds — face UVs are the flat coordinates normalized to those
 // bounds, so the dieline acts as the UV map of the folded object.
 
+import { bleedPixels } from '../model/bleed'
 import { sheetBounds, vertexById, type PaperDoc } from '../model/document'
 import type { MaterialSettings } from '../model/material'
 import {
@@ -16,6 +17,10 @@ import {
 } from '../model/uv'
 
 const MAX_TEX = 2048
+/** Print-quality sheet resolution (true-scale PDF): ≈ 400 dpi on a Letter sheet. */
+export const PRINT_TEX = 4096
+/** Artwork bleed past the cut outline, cm. */
+const BLEED_CM = 0.2
 
 /** True when the material needs a texture map (vs a flat material color). */
 export function materialNeedsTexture(m: MaterialSettings): boolean {
@@ -25,11 +30,12 @@ export function materialNeedsTexture(m: MaterialSettings): boolean {
 export async function buildSheetCanvas(
   doc: PaperDoc,
   material: MaterialSettings,
+  maxTex = MAX_TEX,
 ): Promise<HTMLCanvasElement> {
   const { min, max } = sheetBounds(doc)
   const w = Math.max(max.x - min.x, 0.001)
   const h = Math.max(max.y - min.y, 0.001)
-  const scale = MAX_TEX / Math.max(w, h)
+  const scale = maxTex / Math.max(w, h)
   const canvas = document.createElement('canvas')
   canvas.width = Math.max(8, Math.round(w * scale))
   canvas.height = Math.max(8, Math.round(h * scale))
@@ -81,14 +87,29 @@ export async function buildSheetCanvas(
  * artwork in 3D; here that same artwork region is pulled back into the face's
  * dieline position (inverse affine warp, clipped to the face polygon), so a
  * printed-and-folded sheet matches the 3D preview exactly. With no UV edits
- * this returns buildSheetCanvas unchanged.
+ * this is buildSheetCanvas. Artwork then bleeds ~2 mm past the cut outline
+ * (so a slightly-off cut shows no white) and everything further out is blank
+ * paper — the cut-away scrap wastes no ink.
  */
 export async function buildPrintCanvas(
   doc: PaperDoc,
   material: MaterialSettings,
   uvEdits?: UVEdits,
+  maxTex = MAX_TEX,
 ): Promise<HTMLCanvasElement> {
-  const base = await buildSheetCanvas(doc, material)
+  const base = await buildSheetCanvas(doc, material, maxTex)
+  const out = compensateUVs(doc, material, base, uvEdits)
+  if (materialNeedsTexture(material)) bleedOutline(doc, out, material.baseColor)
+  return out
+}
+
+/** Pull UV-shifted artwork back into each edited face's dieline position. */
+function compensateUVs(
+  doc: PaperDoc,
+  material: MaterialSettings,
+  base: HTMLCanvasElement,
+  uvEdits?: UVEdits,
+): HTMLCanvasElement {
   const edited = doc.faces.filter((f) => {
     const t = uvEdits?.[f.id]
     return t && !isIdentityFaceUV(t)
@@ -133,6 +154,54 @@ export async function buildPrintCanvas(
     ctx.restore()
   }
   return out
+}
+
+/** Keep art inside the faces, bleed it BLEED_CM outward, blank the rest to paper. */
+function bleedOutline(doc: PaperDoc, canvas: HTMLCanvasElement, paper: string) {
+  const { min, max } = sheetBounds(doc)
+  const sw = Math.max(max.x - min.x, 0.001)
+  const sh = Math.max(max.y - min.y, 0.001)
+  const W = canvas.width
+  const H = canvas.height
+  // Rasterize the union of all faces as the "inside the cut line" mask.
+  const m = document.createElement('canvas')
+  m.width = W
+  m.height = H
+  const mctx = m.getContext('2d')!
+  mctx.fillStyle = '#000'
+  for (const face of doc.faces) {
+    mctx.beginPath()
+    face.vertexIds.forEach((vid, i) => {
+      const p = vertexById(doc, vid).pos
+      const x = ((p.x - min.x) / sw) * W
+      const y = (1 - (p.y - min.y) / sh) * H
+      if (i === 0) mctx.moveTo(x, y)
+      else mctx.lineTo(x, y)
+    })
+    mctx.closePath()
+    mctx.fill()
+  }
+  const alpha = mctx.getImageData(0, 0, W, H).data
+  const mask = new Uint8Array(W * H)
+  for (let i = 0; i < mask.length; i++) mask[i] = alpha[i * 4 + 3] > 127 ? 1 : 0
+
+  const ctx = canvas.getContext('2d')!
+  const id = ctx.getImageData(0, 0, W, H)
+  const grown = bleedPixels(id.data, W, H, mask, Math.round((BLEED_CM / sw) * W))
+  const [r, g, b] = hexRGB(paper)
+  for (let i = 0; i < grown.length; i++) {
+    if (grown[i]) continue
+    id.data[i * 4] = r
+    id.data[i * 4 + 1] = g
+    id.data[i * 4 + 2] = b
+    id.data[i * 4 + 3] = 255
+  }
+  ctx.putImageData(id, 0, 0)
+}
+
+function hexRGB(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim())
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255]
 }
 
 function tileOnto(
