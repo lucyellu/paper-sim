@@ -292,7 +292,7 @@ export function ThreeView() {
           uv.setXY(i, u, v)
         }
         uv.needsUpdate = true
-        const depth = depthOf.get(face.id) ?? 0
+        const depth = face.layer ?? depthOf.get(face.id) ?? 0
         const mat = new THREE.MeshStandardMaterial({
           color: KRAFT,
           roughness: 0.92,

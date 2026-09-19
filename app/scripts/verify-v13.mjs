@@ -27,8 +27,9 @@ const CHERRY = REF('pinterest_4081455908182793.png')
 const MILK = REF('pinterest_4081455908182773.png')
 const KITTY = REF('pinterest_4081455908182783.jpg')
 const BUTTER = REF('pinterest_4081455908182770.jpg')
+const LABUBU = REF('pinterest_4081455908182791.jpg')
 const PRINT = fileURLToPath(new globalThis.URL('../../print/', import.meta.url))
-for (const f of [CHERRY, MILK, KITTY, BUTTER]) {
+for (const f of [CHERRY, MILK, KITTY, BUTTER, LABUBU]) {
   if (!existsSync(f)) {
     console.error(`test image missing: ${f}`)
     process.exit(1)
@@ -144,6 +145,7 @@ const geometry = await page.evaluate(() => {
     apart: !crosses(sq((a, b) => [a, b, 0]), sq((a, b) => [a + 5, b, 1])),
   }
 
+  let hiddenPairs = 0
   const results = [{ key: 'detector self-test', ...detector, ok: detector.pierced && detector.stacked && detector.apart }]
   const W = 6
   const D = 3
@@ -163,6 +165,7 @@ const geometry = await page.evaluate(() => {
             const e = mats.get(f.id).elements
             return {
               name: f.name,
+              layer: f.layer ?? 0,
               pts: f.vertexIds.map((id) => {
                 const { x, y } = pos.get(id)
                 return [e[0] * x + e[4] * y + e[12], e[1] * x + e[5] * y + e[13], e[2] * x + e[6] * y + e[14]]
@@ -177,7 +180,16 @@ const geometry = await page.evaluate(() => {
               const A = polys[i]
               const B = polys[j]
               if (crosses(A.pts, B.pts) || crosses(B.pts, A.pts)) problems.push(`${A.name} ⨯ ${B.name}`)
-              else if (kind(A.name) === kind(B.name) && coplanarArea(A.pts, B.pts) > 1e-3) problems.push(`${A.name} ≡ ${B.name}`)
+              else if (coplanarArea(A.pts, B.pts) > 1e-3) {
+                if (kind(A.name) === kind(B.name)) problems.push(`${A.name} ≡ ${B.name}`)
+                // A hidden flap flat against a visible panel must draw beneath it.
+                const hidden = (p) => ['dust', 'tuck', 'glue'].includes(kind(p.name))
+                if (hidden(A) !== hidden(B)) {
+                  hiddenPairs++
+                  const [h, v] = hidden(A) ? [A, B] : [B, A]
+                  if (h.layer >= v.layer) problems.push(`${h.name} draws over ${v.name}`)
+                }
+              }
             }
           const angleSet = [...new Set(Object.values(doc.targetAngles).map((a) => Math.abs(a)))]
           results.push({
@@ -196,6 +208,7 @@ const geometry = await page.evaluate(() => {
               angleSet.every((a) => Math.abs(a - 90) < 0.05),
           })
         }
+  results.push({ key: 'hidden flaps checked', hiddenPairs, ok: hiddenPairs >= 16 * 4 })
   return results
 })
 const geometryOk = geometry.every((r) => r.ok)
@@ -435,6 +448,39 @@ await savePdf('v13-butter-107.pdf')
 await foldedShot('v13-butter-folded.png')
 const butterOk = butter.pdf.pages === 1
 
+// #791 (Labubu): aged-paper background with a dark vignette, unprinted dust
+// flaps drawn only as outlines, four EQUAL columns (square box). The auto-guess
+// must keep the vignette out of the drawing, put the body top at the body (not
+// the lid), and read the lid panels (1st and 3rd, reverse) from the flaps.
+// Expected positions measured on the picture, as fractions of its size.
+const LABUBU_FRAC = {
+  x: { glue: 0.0325, c0: 0.0625, c1: 0.2917, c2: 0.5166, c3: 0.7414, c4: 0.9663 },
+  y: { topTuck: 0.159, bodyH: 0.3685, body0: 0.6325, botTuck: 0.84 },
+}
+await openWizard(LABUBU)
+await page.locator('.fit-modal').screenshot({ path: SHOTS + 'v13-wizard-labubu.png' })
+const labubuFit = await fitState()
+const labubuOptions = await page.evaluate(() =>
+  [...document.querySelectorAll('.fit-modal button.active[data-opt]')].map((b) => b.dataset.opt).sort(),
+)
+const labubuErr = Math.max(
+  ...Object.entries(LABUBU_FRAC.x).map(([id, f]) => Math.abs(labubuFit.g.x[id] / labubuFit.w - f)),
+  ...Object.entries(LABUBU_FRAC.y).map(([id, f]) => Math.abs(labubuFit.g.y[id] / labubuFit.h - f)),
+)
+await page.locator('.fit-modal button.primary', { hasText: 'Build box' }).click()
+await page.waitForFunction(() => !document.querySelector('.fit-modal'))
+await page.waitForTimeout(500)
+const labubu = await page.evaluate(() => {
+  const p = window.paperSim.store.getState().fitSession.params
+  return { width: p.width, depth: p.depth, height: p.height }
+})
+await foldedShot('v13-labubu-folded.png')
+const labubuOk =
+  labubuErr < 0.015 &&
+  labubuOptions.join() === 'glueSide=left,lidOn=first,order=front-first,style=reverse' &&
+  Math.abs(labubu.height / labubu.width - 1.43) < 0.08 &&
+  Math.abs(labubu.width / labubu.depth - 1) < 0.05
+
 // ---- 3. Gable regression: #110 through the same wizard ----------------------------
 await openWizard(MILK)
 await page.locator('.fit-modal button[data-arch=gable]').click()
@@ -503,6 +549,7 @@ await foldedShot('v13-tuckbox-folded.png')
 const result = {
   geometry: geometry.filter((r) => !r.ok).length ? geometry : `${geometry.length - 1} variants + detector self-test ok`,
   geometryOk,
+  hiddenFlapPairs: geometry.find((r) => r.key === "hidden flaps checked").hiddenPairs,
   guessed: { guides: guessed.g, options: guessedOptions },
   dragErr,
   cherry,
@@ -512,13 +559,15 @@ const result = {
   kittyOk,
   butter,
   butterOk,
+  labubu: { ...labubu, options: labubuOptions, maxGuideErr: labubuErr },
+  labubuOk,
   milk,
   milkOk,
   traced,
   tracedOk,
   pageErrors,
 }
-const ok = geometryOk && cherryOk && refitOk && kittyOk && butterOk && milkOk && tracedOk && pageErrors.length === 0
+const ok = geometryOk && cherryOk && refitOk && kittyOk && butterOk && labubuOk && milkOk && tracedOk && pageErrors.length === 0
 console.log(JSON.stringify({ ...result, ok }, null, 2))
 await browser.close()
 process.exit(ok ? 0 : 1)

@@ -263,7 +263,27 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 
 *(newest first)*
 
-- **2026-09-18 (latest)** — **Fit-the-grid dieline importer + tuck boxes**
+- **2026-09-18 (latest)** — **Dieline import fixes from the first real try (#791, Labubu).**
+  - *Too-tall box:* the aged-paper background has a dark vignette, which the
+    color mask counted as drawing. The drawing box became the whole picture, so
+    the body top snapped to the lid top. Masks now come from
+    `floodForeground` (`model/dielineImage.ts`), used by the analyzer and by
+    `foregroundMask`. It floods the background in from the border: a pixel
+    joins if it is near the border color or a small step from its neighbor,
+    and specks under 0.1% are dropped. The dieline outline stops the flood, so
+    unprinted flaps drawn only as outlines count as drawing.
+  - *Equal columns:* when all four panels are the same width, the lid panels
+    decide the panel order. `initialFit` looks for a flap in the band 65–90%
+    of a lid's length past the body, for every column. Dust flaps don't reach
+    that band. Lids may now sit on the narrower panel (W < D is allowed).
+  - *Flaps showing through:* dust flaps drew over the lids, and tucks and the
+    glue flap drew through the walls. The viewer broke coplanar ties by
+    fold-tree depth. `Face.layer` (optional) now overrides that; the tuck
+    builder sets hidden = 0, walls = 1, lids = 2.
+  - verify-v13 adds #791 from the auto-guess (guides within 1.5%, layout, square
+    box ≈ 1.47 H/W) and a check that each hidden flap draws beneath the panel
+    covering it (112 pairs). All 14 verify scripts pass.
+- **2026-09-18** — **Fit-the-grid dieline importer + tuck boxes**
   (`BRIEF-dieline-to-fold.md`). File → **Import dieline image…** is now
   `ui/FitDielineDialog.tsx`, which replaces `ImportDielineDialog`. It has two screens.
   **Prep**: rotate ±90°, flip, drag-crop; the result is baked to a new PNG and every

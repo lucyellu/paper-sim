@@ -7,7 +7,7 @@
 
 import { ARCHETYPES, COLUMN_GUIDES, type Archetype, type ArchetypeId, type GuidePositions } from './archetypes'
 import { sheetBounds, type PaperDoc, type Vec2 } from './document'
-import type { DielineImageAnalysis } from './dielineImage'
+import { floodForeground, type DielineImageAnalysis } from './dielineImage'
 import type { OverlayTransform } from './material'
 import type { RGBAImage } from './photoUnwarp'
 import { fitsOneLetterPage } from './printFit'
@@ -141,37 +141,14 @@ export function sharpHeight(g: ImageGuides, dpi = MIN_PRINT_DPI): number {
 // Initial guess
 
 /**
- * Foreground = differs from the median border color by more than `threshold`
- * (sum of channel differences), or is opaque on a transparent picture. The
- * default is sensitive on purpose: pastel flaps on cream paper differ by ~35.
+ * Foreground = the drawing: the background is flooded in from the border (see
+ * floodForeground), so vignettes stay background and flaps drawn only as an
+ * outline on the background count as drawing. `threshold` is the color
+ * distance from the border median that is always background — sensitive on
+ * purpose: pastel flaps on cream paper differ by ~35.
  */
 export function foregroundMask(img: RGBAImage, threshold = 24): Uint8Array {
-  const { width: w, height: h, data } = img
-  const border: number[][] = [[], [], [], []]
-  const push = (x: number, y: number) => {
-    const i = (y * w + x) * 4
-    for (let c = 0; c < 4; c++) border[c].push(data[i + c])
-  }
-  for (let x = 0; x < w; x += 2) {
-    push(x, 0)
-    push(x, h - 1)
-  }
-  for (let y = 0; y < h; y += 2) {
-    push(0, y)
-    push(w - 1, y)
-  }
-  const med = border.map((v) => v.sort((a, b) => a - b)[v.length >> 1])
-  const alphaMode = med[3] < 128
-  const mask = new Uint8Array(w * h)
-  for (let i = 0, p = 0; i < w * h; i++, p += 4) {
-    if (data[p + 3] < 32) continue
-    mask[i] = alphaMode
-      ? 1
-      : Math.abs(data[p] - med[0]) + Math.abs(data[p + 1] - med[1]) + Math.abs(data[p + 2] - med[2]) > threshold
-        ? 1
-        : 0
-  }
-  return mask
+  return floodForeground(img.data, img.width, img.height, { tol: threshold })
 }
 
 /** Fraction of foreground pixels in the px rect [x0,x1)×[y0,y1). */
@@ -369,23 +346,33 @@ export function initialFit(
   COLUMN_GUIDES.forEach((id, i) => (xs[id] = cols!.lines[i]))
   const guides: ImageGuides = { x: xs, y: ys }
 
-  // ---- Lids: which wide panel has something above / below the body.
+  // ---- Lids: which panels have a flap reaching well past dust-flap length
+  // above / below the body. A lid spans the depth — the width of the panels
+  // beside it — so each column is tested against its neighbours' width. The
+  // lid panels are the builder's "wide" panels, so they also settle the panel
+  // order when the columns are (nearly) equal width.
   if (mask && !lockLayout && arch.options.some((o) => o.key === 'lidOn')) {
-    const wideIdx = cols.wideFirst ? [0, 2] : [1, 3]
-    const depthPx = sized.depth / k
+    const l = cols.lines
+    const colW = [0, 1, 2, 3].map((i) => l[i + 1] - l[i])
     const cov = (i: number, y0: number, y1: number) => {
-      const l = cols!.lines
-      const inset = (l[i + 1] - l[i]) * 0.2
+      const inset = colW[i] * 0.2
       return coverage(mask, imgW, imgH, l[i] + inset, y0, l[i + 1] - inset, y1)
     }
-    const top = wideIdx.map((i) => cov(i, body!.top - depthPx * 0.7, body!.top - depthPx * 0.15))
-    const bot = wideIdx.map((i) => cov(i, body!.bottom + depthPx * 0.15, body!.bottom + depthPx * 0.7))
-    if (Math.abs(top[0] - top[1]) > 0.25 && Math.abs(bot[0] - bot[1]) > 0.25) {
-      const topFirst = top[0] > top[1]
-      const botFirst = bot[0] > bot[1]
+    const lidLen = (i: number) => (i % 2 ? colW[0] + colW[2] : colW[1] + colW[3]) / 2
+    const top = [0, 1, 2, 3].map((i) => cov(i, body!.top - lidLen(i) * 0.9, body!.top - lidLen(i) * 0.65))
+    const bot = [0, 1, 2, 3].map((i) => cov(i, body!.bottom + lidLen(i) * 0.65, body!.bottom + lidLen(i) * 0.9))
+    const clearMax = (s: number[]) => {
+      const order = [0, 1, 2, 3].sort((a, b) => s[b] - s[a])
+      return s[order[0]] - s[order[1]] > 0.3 ? order[0] : -1
+    }
+    const t = clearMax(top)
+    const b = clearMax(bot)
+    if (t >= 0 && b >= 0 && t % 2 === b % 2) {
+      const wideFirst = t % 2 === 0
       params = arch.withOptions(params, {
-        lidOn: topFirst ? 'first' : 'second',
-        style: topFirst === botFirst ? 'straight' : 'reverse',
+        order: wideFirst ? 'front-first' : 'side-first',
+        lidOn: t === (wideFirst ? 0 : 1) ? 'first' : 'second',
+        style: t === b ? 'straight' : 'reverse',
       })
     }
   }

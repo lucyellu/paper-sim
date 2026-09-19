@@ -101,62 +101,11 @@ export function analyzeImageData(id: ImageData): DielineImageAnalysis {
   let vCandidates: number[] = []
   let hCandidates: number[] = []
 
-  // ---- 1. Foreground mask: transparency if present, else border-color diff.
-  let borderTransparent = 0
-  let borderCount = 0
-  const sampleBorder = (x: number, y: number) => {
-    borderCount++
-    if (px[(y * W + x) * 4 + 3] < 128) borderTransparent++
-  }
-  for (let x = 0; x < W; x++) {
-    sampleBorder(x, 0)
-    sampleBorder(x, H - 1)
-  }
-  for (let y = 0; y < H; y++) {
-    sampleBorder(0, y)
-    sampleBorder(W - 1, y)
-  }
-  const alphaMode = borderTransparent > borderCount * 0.25
-
-  let bgR = 0
-  let bgG = 0
-  let bgB = 0
-  if (!alphaMode) {
-    // Background color = average of the four 3×3 corner patches.
-    let n = 0
-    for (const [cx, cy] of [
-      [1, 1],
-      [W - 2, 1],
-      [1, H - 2],
-      [W - 2, H - 2],
-    ]) {
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const i = ((cy + dy) * W + (cx + dx)) * 4
-          bgR += px[i]
-          bgG += px[i + 1]
-          bgB += px[i + 2]
-          n++
-        }
-      }
-    }
-    bgR /= n
-    bgG /= n
-    bgB /= n
-  }
-
-  const mask = new Uint8Array(W * H)
+  // ---- 1. Foreground mask: background flooded in from the border.
+  const mask = floodForeground(px, W, H)
   const lum = new Float32Array(W * H)
   for (let i = 0, p = 0; i < W * H; i++, p += 4) {
-    const a = px[p + 3]
-    lum[i] = (0.299 * px[p] + 0.587 * px[p + 1] + 0.114 * px[p + 2]) * (a / 255)
-    mask[i] = alphaMode
-      ? a > 32
-        ? 1
-        : 0
-      : Math.abs(px[p] - bgR) + Math.abs(px[p + 1] - bgG) + Math.abs(px[p + 2] - bgB) > 48 && a > 32
-        ? 1
-        : 0
+    lum[i] = (0.299 * px[p] + 0.587 * px[p + 1] + 0.114 * px[p + 2]) * (px[p + 3] / 255)
   }
 
   // ---- 2. Content box.
@@ -353,6 +302,162 @@ export function analyzeImageData(id: ImageData): DielineImageAnalysis {
     confidence,
     overlay,
   }
+}
+
+/**
+ * Foreground mask (1 = drawing) by flooding the background in from the
+ * picture's border. A background pixel is close to the border's median color
+ * (`tol`) OR a small step (`step`) from the background pixel next to it — so a
+ * vignette or aged-paper tint is still background, while the dieline's outline
+ * stops the flood and unprinted flaps drawn only as outlines on the background
+ * count as drawing. Transparent pictures use alpha. Works on a ≤ `maxSide`
+ * lightly blurred copy (paper grain would otherwise stall the flood) and
+ * upsamples the result.
+ */
+export function floodForeground(
+  data: Uint8ClampedArray | Uint8Array,
+  w: number,
+  h: number,
+  { tol = 24, step = 6, maxSide = 1000 } = {},
+): Uint8Array {
+  const out = new Uint8Array(w * h)
+  // Transparent background → alpha is the answer.
+  let bt = 0
+  let bn = 0
+  for (let x = 0; x < w; x++) for (const y of [0, h - 1]) (bn++, data[(y * w + x) * 4 + 3] < 128 && bt++)
+  for (let y = 0; y < h; y++) for (const x of [0, w - 1]) (bn++, data[(y * w + x) * 4 + 3] < 128 && bt++)
+  if (bt > bn * 0.25) {
+    for (let i = 0; i < w * h; i++) out[i] = data[i * 4 + 3] > 32 ? 1 : 0
+    return out
+  }
+
+  // Box-downscale to ≤ maxSide.
+  const f = Math.max(1, Math.ceil(Math.max(w, h) / maxSide))
+  const lw = Math.ceil(w / f)
+  const lh = Math.ceil(h / f)
+  const low = new Float32Array(lw * lh * 3)
+  const cnt = new Float32Array(lw * lh)
+  for (let y = 0; y < h; y++) {
+    const ly = (y / f) | 0
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      const j = ly * lw + ((x / f) | 0)
+      low[j * 3] += data[i]
+      low[j * 3 + 1] += data[i + 1]
+      low[j * 3 + 2] += data[i + 2]
+      cnt[j]++
+    }
+  }
+  for (let j = 0; j < lw * lh; j++) for (let c = 0; c < 3; c++) low[j * 3 + c] /= cnt[j]
+  // 3×3 blur.
+  const img = new Float32Array(lw * lh * 3)
+  for (let y = 0; y < lh; y++) {
+    for (let x = 0; x < lw; x++) {
+      let n = 0
+      let r = 0
+      let g = 0
+      let b = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy
+        if (yy < 0 || yy >= lh) continue
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx
+          if (xx < 0 || xx >= lw) continue
+          const k = (yy * lw + xx) * 3
+          r += low[k]
+          g += low[k + 1]
+          b += low[k + 2]
+          n++
+        }
+      }
+      const k = (y * lw + x) * 3
+      img[k] = r / n
+      img[k + 1] = g / n
+      img[k + 2] = b / n
+    }
+  }
+
+  // Border median color.
+  const border: number[][] = [[], [], []]
+  const push = (x: number, y: number) => {
+    const k = (y * lw + x) * 3
+    for (let c = 0; c < 3; c++) border[c].push(img[k + c])
+  }
+  for (let x = 0; x < lw; x++) (push(x, 0), push(x, lh - 1))
+  for (let y = 1; y < lh - 1; y++) (push(0, y), push(lw - 1, y))
+  const med = border.map((v) => v.sort((a, b) => a - b)[v.length >> 1])
+  const nearMed = (k: number) =>
+    Math.abs(img[k] - med[0]) + Math.abs(img[k + 1] - med[1]) + Math.abs(img[k + 2] - med[2]) <= tol
+  const opaque = (j: number, lx: number, ly: number) =>
+    data[(Math.min(h - 1, ly * f) * w + Math.min(w - 1, lx * f)) * 4 + 3] > 32
+
+  // Flood from border pixels that match the background.
+  const bg = new Uint8Array(lw * lh)
+  const queue = new Int32Array(lw * lh)
+  let head = 0
+  let tail = 0
+  const seed = (x: number, y: number) => {
+    const j = y * lw + x
+    if (!bg[j] && (nearMed(j * 3) || !opaque(j, x, y))) {
+      bg[j] = 1
+      queue[tail++] = j
+    }
+  }
+  for (let x = 0; x < lw; x++) (seed(x, 0), seed(x, lh - 1))
+  for (let y = 0; y < lh; y++) (seed(0, y), seed(lw - 1, y))
+  while (head < tail) {
+    const j = queue[head++]
+    const x = j % lw
+    const y = (j / lw) | 0
+    const kc = j * 3
+    for (const [nx, ny] of [
+      [x - 1, y],
+      [x + 1, y],
+      [x, y - 1],
+      [x, y + 1],
+    ]) {
+      if (nx < 0 || ny < 0 || nx >= lw || ny >= lh) continue
+      const n = ny * lw + nx
+      if (bg[n]) continue
+      const kn = n * 3
+      const d = Math.abs(img[kn] - img[kc]) + Math.abs(img[kn + 1] - img[kc + 1]) + Math.abs(img[kn + 2] - img[kc + 2])
+      if (d <= step || nearMed(kn) || !opaque(n, nx, ny)) {
+        bg[n] = 1
+        queue[tail++] = n
+      }
+    }
+  }
+
+  // Specks the flood stepped around (grain, dust, stray watermark letters)
+  // would stretch the drawing's extent: drop foreground islands under 0.1%.
+  const minArea = lw * lh * 0.001
+  const comp = new Int32Array(lw * lh)
+  for (let s = 0; s < lw * lh; s++) {
+    if (bg[s] || comp[s]) continue
+    comp[s] = 1
+    head = 0
+    tail = 0
+    queue[tail++] = s
+    while (head < tail) {
+      const j = queue[head++]
+      const x = j % lw
+      const y = (j / lw) | 0
+      if (x > 0 && !bg[j - 1] && !comp[j - 1]) (comp[j - 1] = 1, (queue[tail++] = j - 1))
+      if (x < lw - 1 && !bg[j + 1] && !comp[j + 1]) (comp[j + 1] = 1, (queue[tail++] = j + 1))
+      if (y > 0 && !bg[j - lw] && !comp[j - lw]) (comp[j - lw] = 1, (queue[tail++] = j - lw))
+      if (y < lh - 1 && !bg[j + lw] && !comp[j + lw]) (comp[j + lw] = 1, (queue[tail++] = j + lw))
+    }
+    if (tail < minArea) for (let q = 0; q < tail; q++) bg[queue[q]] = 1
+  }
+
+  for (let y = 0; y < h; y++) {
+    const row = ((y / f) | 0) * lw
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      out[i] = !bg[row + ((x / f) | 0)] && data[i * 4 + 3] > 32 ? 1 : 0
+    }
+  }
+  return out
 }
 
 /** Scale the ratio measurements to real gable dims for a chosen body height (cm). */

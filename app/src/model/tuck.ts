@@ -313,6 +313,11 @@ export function buildTuckBox(params: TuckParams = defaultTuckParams()): PaperDoc
     addPoly(b, 'glue flap', [g(0, 0), g(0, H), g(-GLUE, H - gt), g(-GLUE, gt)], ['crease', 'cut', 'cut', 'cut'])
   }
 
+  // Hidden flaps lie flat against the panels that cover them — dust flaps
+  // under the lids, tucks and the glue flap inside the walls — so they draw
+  // beneath them wherever the two coincide.
+  for (const f of b.faces) f.layer = /dust|tuck|glue/.test(f.name) ? 0 : /lid/.test(f.name) ? 2 : 1
+
   const doc: PaperDoc = { vertices: b.vertices, edges: b.edges, faces: b.faces, rootFaceId }
   doc.targetAngles = deriveTargetAngles(doc, buildPanelTree(doc), b.target3)
   return doc

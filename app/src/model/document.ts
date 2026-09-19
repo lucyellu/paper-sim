@@ -26,6 +26,13 @@ export interface Face {
   name: string
   /** Vertex ids, counter-clockwise in flat coordinates. */
   vertexIds: number[]
+  /**
+   * Draw priority where this face lies flat against another (higher = on
+   * top). Omitted = its fold-tree depth, which suits flaps folded onto their
+   * own parent; builders set it when a hidden flap tucks behind a panel that
+   * is shallower in the tree (a tuck inside a wall, dust flaps under a lid).
+   */
+  layer?: number
 }
 
 export interface PaperDoc {
