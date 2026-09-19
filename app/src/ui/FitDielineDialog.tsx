@@ -44,6 +44,7 @@ import { defaultMaterial } from '../model/material'
 import { projectNameFromFileName } from '../model/naming'
 import { fitsOneLetterPage } from '../model/printFit'
 import { useAppStore, type TemplateDims } from '../state/store'
+import { saveToLibraryWithToast } from './libraryActions'
 import { loadImage } from '../viewer/texture'
 
 const VIEW_W = 720
@@ -599,6 +600,8 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   function build() {
     if (!baked || !guides || !eff || !art || !fitted) return
     const st = useAppStore.getState()
+    // A re-fit replaces the import it came from in the library.
+    const refitId = session ? st.libraryId : null
     st.newDocument(arch.template, fitted.params as TemplateDims)
     const doc = useAppStore.getState().doc
     useAppStore.getState().setProjectName(projectNameFromFileName(fileName))
@@ -631,6 +634,10 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
       heightCm,
       folded: hasColumns ? folded : 'none',
     })
+    saveToLibraryWithToast(
+      { kind: 'dieline', id: refitId ?? undefined, sourceName: fileName },
+      refitId ? 'Library entry updated' : 'Added to library',
+    )
     onClose()
   }
 

@@ -9,6 +9,7 @@ import { Timeline } from './ui/Timeline'
 import { TopBar } from './ui/TopBar'
 import { UVEditor } from './ui/UVEditor'
 import { ViewBar } from './ui/ViewBar'
+import { saveToLibraryWithToast } from './ui/libraryActions'
 import { ThreeView } from './viewer/ThreeView'
 
 export default function App() {
@@ -24,6 +25,9 @@ export default function App() {
         e.preventDefault()
         if (e.shiftKey) s.redo()
         else s.undo()
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        saveToLibraryWithToast()
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault()
         s.redo()

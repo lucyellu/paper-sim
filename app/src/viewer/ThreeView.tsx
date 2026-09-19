@@ -366,6 +366,8 @@ export function ThreeView() {
     // ---- sheet material (base color / paper texture / design overlay) -----
     let sheetTex: THREE.CanvasTexture | null = null
     let texGen = 0
+    /** The in-flight sheet-texture build (thumbnails wait for it). */
+    let texPending: Promise<void> = Promise.resolve()
 
     function applySheetMaterial() {
       const m = useAppStore.getState().material
@@ -388,14 +390,16 @@ export function ThreeView() {
         return
       }
       const gen = ++texGen
-      void buildSheetCanvas(s.doc, s.material).then((canvas) => {
-        if (gen !== texGen) return // superseded by a newer material/doc
-        sheetTex?.dispose()
-        sheetTex = new THREE.CanvasTexture(canvas)
-        sheetTex.colorSpace = THREE.SRGBColorSpace
-        sheetTex.anisotropy = 4
-        applySheetMaterial()
-      })
+      texPending = buildSheetCanvas(s.doc, s.material)
+        .then((canvas) => {
+          if (gen !== texGen) return // superseded by a newer material/doc
+          sheetTex?.dispose()
+          sheetTex = new THREE.CanvasTexture(canvas)
+          sheetTex.colorSpace = THREE.SRGBColorSpace
+          sheetTex.anisotropy = 4
+          applySheetMaterial()
+        })
+        .catch((err) => console.warn('sheet texture failed', err))
     }
 
     /** Rewrite every face's UV attribute in place (live UV-mode edits). */
@@ -1014,7 +1018,14 @@ export function ThreeView() {
       }
       return urls
     }
-    registerCapture(capture)
+    registerCapture(capture, async () => {
+      // A newer build may start while we wait; settle on the latest one.
+      let p: Promise<void>
+      do {
+        p = texPending
+        await p
+      } while (p !== texPending)
+    })
 
     // Dev-only handle for scripted verification (scripts/verify-*.mjs).
     if (import.meta.env.DEV) {

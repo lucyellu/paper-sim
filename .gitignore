@@ -19,3 +19,9 @@ main.*.jpg
 
 # generated print-ready PDFs (may embed third-party reference artwork)
 print/
+
+# the local project library database (app/server/libraryServer.mjs)
+library/
+# local env (Supabase URL/key for the optional cloud library)
+.env.local
+.env.*.local

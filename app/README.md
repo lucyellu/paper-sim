@@ -87,6 +87,24 @@ starts the dev server if it isn't running and opens the app in the browser.
   action, "Delete non-deformer" drops renames, "Delete all (bake)" clears history Maya-style.
 - **⊞ toggle** (top right) switches single / quad view (perspective + ortho top/front/side);
   **🌙** toggles dark mode.
+- **Library** (File › Library…, **Ctrl+S** / File › Save to library): a gallery of saved projects
+  with folded 3D thumbnails — double-click to reopen, F2 / Rename, Delete. Imported dieline images
+  and carton photos are added automatically; a dieline import keeps its fit, so File › Re-fit works
+  after reopening it (and updates the same entry).
+  - **Stored on disk** in `library/library.db` (SQLite, repo root, gitignored), served by the dev
+    server at `/api/library` (`server/libraryServer.mjs`, Node 22.13+ for `node:sqlite`).
+    `PAPERSIM_LIBRARY_DIR` moves it. Back it up by copying that folder. If the API isn't there
+    (static hosting) the library falls back to the browser's IndexedDB; entries saved there earlier
+    are copied to disk automatically the first time the disk database is reachable.
+  - **Cloud sync (optional, off by default)** — sync the library between computers via Supabase:
+    1. In a Supabase project, run `supabase/library.sql` (table + row-level security + private
+       `library` storage bucket).
+    2. Authentication › URL Configuration: add `http://localhost:5173` to the redirect URLs.
+    3. Create `app/.env.local` with `VITE_SUPABASE_URL=https://<ref>.supabase.co` and
+       `VITE_SUPABASE_PUBLISHABLE_KEY=<publishable or anon key>`, then restart the dev server.
+    4. File › Library… → enter your email → click the sign-in link. Entries then sync both ways
+       (newest change wins; deletes propagate) on sign-in, shortly after each local change, and
+       when you come back to the tab. The local database stays the primary copy.
 - Files are standard [FOLD](https://github.com/edemaine/fold) JSON with `paperSim:*` extensions.
   **Load** also imports plain FOLD files from other tools (needs `faces_vertices`; authored
   `edges_foldAngle` become target angles).

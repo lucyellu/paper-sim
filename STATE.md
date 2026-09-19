@@ -12,7 +12,7 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs && node scripts/verify-v13.mjs && node scripts/verify-v14.mjs && node scripts/verify-v15.mjs && node scripts/verify-v16.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs && node scripts/verify-v13.mjs && node scripts/verify-v14.mjs && node scripts/verify-v15.mjs && node scripts/verify-v16.mjs && node scripts/verify-v17.mjs && node scripts/verify-v18.mjs && node scripts/verify-v19.mjs && node scripts/verify-v20.mjs`
    Product direction lives in `VISION.md` (pillars, product ladder, what's parked).
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
@@ -210,7 +210,10 @@ numbered sheet (SVG/PDF) and animated GIF/MP4 of timeline playback.
       2026-07-12
 - [ ] Per-hinge angle limits (basic constraints)
 - [ ] Animation export (GIF/MP4)
-- [ ] Starter model library from `reference/` (gift box, cup, boat, peacock…)
+- [x] Project library: IndexedDB gallery of saved projects + auto-added imports
+      (`state/library.ts`, `ui/libraryActions.ts`, `ui/LibraryDialog.tsx`) — 2026-09-18
+- [ ] Starter model library from `reference/` (gift box, cup, boat, peacock…) — could seed the
+      project library as read-only entries
 - [ ] History panel: per-object filtered op list, per-object Delete History (compaction)
 - [ ] Micro-crease fan tool / soft folds (see "Soft folds" note below) — the can shape now ships as a
       faceted cylinder (`model/can.ts`); the fan tool remains for the curved box and the lucky star
@@ -263,7 +266,66 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 
 *(newest first)*
 
-- **2026-09-18 (latest)** — **Top-bar cleanup: File › New… and File › Export… dialogs.**
+- **2026-09-18 (latest)** — **Library → local SQLite database + optional Supabase sync.**
+  - Disk: `app/server/libraryServer.mjs`, a Vite plugin (dev + preview) serving `/api/library`
+    from `<repo>/library/library.db` via `node:sqlite` (no native deps; Node 22.13+). Rows are
+    namespaced by the `x-papersim-ns` header (verify scripts use throwaway namespaces and purge
+    them; purging "default" is refused). Requests must come from a local Host with a same-origin
+    Origin (blocks other sites / DNS rebinding). Deletes are tombstones for sync.
+  - `state/library.ts` picks the backend at first use: disk API if `/api/library/health` answers,
+    else IndexedDB (dev switches: localStorage `paperSim.libraryNs`, `paperSim.libraryBackend =
+    browser`). IndexedDB entries are copied to disk once per namespace (newer wins).
+  - Cloud (decided 2026-09-18: build it dormant; no Supabase project yet — the free org's 2 active
+    slots are cohere + newlifetcm): `state/cloudSync.ts` = merge engine (per id, newer stamp wins;
+    stamp = deletedAt ?? updatedAt) + status store + driver (sync on sign-in, 1.5 s after local
+    edits, on tab focus ≥60 s apart); `state/cloudSupabase.ts` (code-split, loaded only when
+    `VITE_SUPABASE_URL` + `VITE_SUPABASE_PUBLISHABLE_KEY` are set) = magic-link auth + remote on
+    `library_entries` (meta + thumbnail) and private bucket `library/<uid>/<id>.json` (payload).
+    Schema/RLS: `app/supabase/library.sql` — NOT yet run against a real project, so the Supabase
+    remote itself is untested; the merge engine is tested with a fake remote (`verify-v20.mjs`).
+  - Gallery footer shows where the library lives and the cloud line (off / sign in / syncing as…).
+- **2026-09-18** — **Project library.** File › Library… opens a gallery (All / Projects /
+  Imports, search) of entries stored in IndexedDB (`paperSim.library`: `meta` store = name, kind,
+  dates, thumbnail; `data` store = the .fold SaveFile + FitSession, loaded only on open).
+  File › Save to library / **Ctrl+S** updates the entry the project came from (`store.libraryId`;
+  New / Open… clear it) or adds one. Thumbnails are the last fold step rendered by the viewer's
+  capture bridge, which now waits for the sheet texture (`captureReady`) so artwork shows; JPEG
+  320×240. Import dieline image… and Carton from photo… auto-add an entry (`dieline` / `photo`
+  kind); a dieline entry stores its FitSession so Re-fit works after reopening, and a re-fit
+  updates that same entry. Renaming the open entry renames the project. Plain `.fold` opens are
+  NOT auto-added. Background saves confirm via a top-bar toast. `verify-v19.mjs`.
+- **2026-09-18** — **2D pattern inset: resizable + collapsible.** Drag its right edge
+  (140–900 px, capped to the viewport), click the "2D pattern" label to collapse it to a pill.
+  Width + collapsed state persist in `paperSim.panel.patternInset` (reuses `readPref`/`writePref`
+  from `ui/panels.tsx`). `verify-v18.mjs` covers resize, collapse, and reload persistence.
+
+- **2026-09-18** — **Dieline import: lid-panel toggles, folded-away end panel (#767 JUICE).**
+  - The tuck box's layout toggles now describe the picture directly: **Top lid on** Panel 1–4,
+    **Bottom lid on** Panel N (reverse) / Panel M (straight), labels follow the top lid, plus
+    Glue flap. `topLid` maps to the builder's `order` + `lidOn`, so a lid on a narrow-looking
+    column is one click, not "First panel: Narrow + 1st wide panel". `Archetype.options` may
+    now be a function of params (`archetypeOptions`). Changing the lid panel no longer re-guesses
+    columns (only the glue side does). verify-v13 option strings updated.
+  - Lid guess (`initialFit`): each end has lid + two dust flaps + a bare panel opposite the lid,
+    so an end whose single bare column faces a flap names the lid. Otherwise a clearly longest
+    flap. An ambiguous end follows the other end (straight if the lid panel has a flap there,
+    else reverse). Flap lengths are measured per column rather than against neighbour widths.
+  - Body band (tuck): if the edge-pair `hBody` claims rows where the drawing isn't full width
+    (e.g. dust-flap tips across a plain panel), it moves in to the full-width band
+    (`fullWidthBand`, ≥90% of the widest row), snapped to a nearby detected line.
+  - Prep: a single drawing with small marks clearly outside it (a logo, a caption) is picked and
+    isolated automatically, so they don't stretch the outer guides. "Whole image" undoes it.
+  - **Drawn flat: All 4 / Panel 4 folded away / Panel 1 folded away** (tuck + gable). Mockups
+    often show the last panel + glue folded back in perspective. Folded away: that column is
+    copied from its twin (`withFoldedAway`), its copied guides are grey and not draggable, and
+    the strip past the last drawn column prints plain paper in the twin panel's median color
+    (`composeArt` in the dialog; the fit view widens to show it). Auto-guessed
+    (`guessFoldedAway`: end column <70% of its twin and no flaps). Stored in
+    `FitSession.folded`.
+  - `verify-v17.mjs` (#767): logo isolated, guides ±10 px, body top on the crease, top lid 2 +
+    reverse, panel 4 folded away, no mismatch; toggles; W/D and H/W from the flat panels;
+    folded panel and its lid print plain; Re-fit keeps it. Full suite (17 scripts) green.
+- **2026-09-18** — **Top-bar cleanup: File › New… and File › Export… dialogs.**
   - Menu bar is now File / Edit / Mode. File: New…, Open…, Save, the three
     picture imports, Export…. The eight "New — …" items became
     `ui/NewDocDialog.tsx`: a card grid with real dieline thumbnails

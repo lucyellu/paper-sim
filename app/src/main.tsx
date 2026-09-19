@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
 import { useAppStore } from './state/store'
+import { initCloudSync, setRemote, syncWith, useCloud } from './state/cloudSync'
+import * as library from './state/library'
 import { fromFoldFile, toFoldFile } from './model/foldfile'
 import { buildCarton } from './model/carton'
 import { buildGableCarton } from './model/gable'
@@ -87,8 +89,13 @@ if (import.meta.env.DEV) {
     sanitizeUVEdits,
     buildPrintCanvas,
     buildSheetCanvas,
+    library,
+    cloud: { syncWith, setRemote, useCloud },
   }
 }
+
+// Optional cloud library sync (no-op unless Supabase is configured).
+initCloudSync()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

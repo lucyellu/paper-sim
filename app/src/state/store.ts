@@ -111,6 +111,8 @@ export interface AppState {
    * File → Re-fit can reopen the wizard after checking the 3D fold.
    */
   fitSession: FitSession | null
+  /** The library entry this project was opened from / last saved to (null = not in the library). */
+  libraryId: string | null
 
   dispatch: (op: Op, opts?: { alreadyApplied?: boolean }) => void
   setAngleTransient: (edgeId: number, deg: number) => void
@@ -170,6 +172,7 @@ export interface AppState {
   setMaterial: (material: MaterialSettings) => void
   setBackdrop: (backdrop: Backdrop | null) => void
   setFitSession: (fitSession: FitSession | null) => void
+  setLibraryId: (id: string | null) => void
   newDocument: (template?: Template, dims?: TemplateDims) => void
   saveFile: () => void
   loadFile: (json: unknown, fileName: string) => void
@@ -271,6 +274,7 @@ export const useAppStore = create<AppState>((set, get) => {
     uvEdits: {},
     backdrop: null,
     fitSession: null,
+    libraryId: null,
 
     dispatch: (op, opts) => {
       const s = get()
@@ -560,6 +564,7 @@ export const useAppStore = create<AppState>((set, get) => {
     setMaterial: (material) => set({ material }),
     setBackdrop: (backdrop) => set({ backdrop }),
     setFitSession: (fitSession) => set({ fitSession }),
+    setLibraryId: (libraryId) => set({ libraryId }),
 
     newDocument: (template = 'tuck', dims) => {
       const doc = buildTemplate(template, dims)
@@ -585,6 +590,7 @@ export const useAppStore = create<AppState>((set, get) => {
         material: defaultMaterial(),
         uvEdits: {},
         backdrop: null,
+        libraryId: null,
         editorMode: '3d',
         workspaceMode: 'fold',
       })
@@ -592,16 +598,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     saveFile: () => {
       const s = get()
-      const file = toFoldFile(
-        s.doc,
-        s.angles,
-        s.steps,
-        s.history,
-        s.transform,
-        s.projectName,
-        s.material,
-        s.uvEdits,
-      )
+      const file = currentSaveFile(s)
       const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -628,12 +625,18 @@ export const useAppStore = create<AppState>((set, get) => {
         material: loaded.material,
         uvEdits: loaded.uvEdits,
         backdrop: null,
+        libraryId: null,
         editorMode: '3d',
         workspaceMode: 'fold',
       })
     },
   }
 })
+
+/** The current project as a .fold file (what File › Save and the library store). */
+export function currentSaveFile(s: AppState) {
+  return toFoldFile(s.doc, s.angles, s.steps, s.history, s.transform, s.projectName, s.material, s.uvEdits)
+}
 
 /** Angles to render right now: working angles, or step interpolation while scrubbing. */
 export function getDisplayAngles(s: AppState): Record<number, number> {

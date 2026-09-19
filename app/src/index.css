@@ -1489,3 +1489,118 @@ button.dlg-go {
 .dlg-status.error {
   color: #c2410c;
 }
+
+/* ---- File › Library… ---- */
+.modal.lib-modal {
+  width: min(860px, 94vw);
+}
+.lib-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.lib-head h2 {
+  margin: 0;
+  margin-right: auto;
+}
+.lib-filter {
+  display: flex;
+  gap: 4px;
+}
+.lib-search {
+  width: 160px;
+}
+.lib-grid {
+  max-height: min(56vh, 520px);
+  overflow: auto;
+  padding: 3px;
+}
+.lib-card {
+  position: relative;
+  border: 1px solid var(--btn-border);
+  background: var(--btn-bg);
+  cursor: pointer;
+  user-select: none;
+}
+.lib-card:hover {
+  background: var(--btn-hover);
+}
+.lib-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.lib-card .new-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-nothumb {
+  height: 110px;
+  background: #faf6ec;
+  border-radius: 5px;
+  margin-bottom: 4px;
+}
+.lib-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+}
+.lib-rename {
+  font: inherit;
+  font-weight: 600;
+  width: 100%;
+  box-sizing: border-box;
+}
+.lib-empty {
+  margin: 18px 4px;
+}
+.lib-actions {
+  flex-wrap: wrap;
+}
+.lib-spacer {
+  flex: 1;
+}
+
+/* Top-bar confirmation for background library saves. */
+.topbar-toast {
+  margin-left: auto;
+  margin-right: 10px;
+  font-size: 12px;
+  color: var(--hint);
+  animation: topbar-toast-in 0.15s ease-out;
+}
+@keyframes topbar-toast-in {
+  from {
+    opacity: 0;
+  }
+}
+.lib-where code {
+  font-size: 11px;
+  word-break: break-all;
+}
+.lib-cloud {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 8px;
+  margin: 8px 0 0;
+}
+.lib-cloud > .hint {
+  margin: 0;
+}
+.lib-cloud-signin input {
+  flex: 1 1 180px;
+  min-width: 0;
+}

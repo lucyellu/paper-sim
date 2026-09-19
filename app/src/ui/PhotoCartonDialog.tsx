@@ -27,6 +27,7 @@ import {
   type RGBAImage,
 } from '../model/photoUnwarp'
 import { useAppStore } from '../state/store'
+import { saveToLibraryWithToast } from './libraryActions'
 import { loadImage } from '../viewer/texture'
 
 const MAX_VIEW_W = 700
@@ -300,6 +301,7 @@ export function PhotoCartonDialog({ dataUrl, fileName, onClose }: PhotoCartonPro
       useAppStore.getState().newDocument('gable', dims)
       useAppStore.getState().setProjectName(projectNameFromFileName(fileName))
       useAppStore.getState().setMaterial({ ...defaultMaterial(), baseColor: '#ffffff', overlayImage })
+      saveToLibraryWithToast({ kind: 'photo', sourceName: fileName }, 'Added to library')
       onClose()
     } catch (err) {
       setError(`Could not build the artwork (${err instanceof Error ? err.message : err}).`)

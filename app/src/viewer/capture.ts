@@ -7,9 +7,16 @@ export type PoseAngles = Record<number, number> // hinge edge id -> degrees
 export type CaptureFn = (poses: PoseAngles[], size?: { w: number; h: number }) => string[]
 
 let captureFn: CaptureFn | null = null
+let readyFn: (() => Promise<void>) | null = null
 
-export function registerCapture(fn: CaptureFn | null): void {
+export function registerCapture(fn: CaptureFn | null, ready?: () => Promise<void>): void {
   captureFn = fn
+  readyFn = fn ? (ready ?? null) : null
+}
+
+/** Resolves once the viewer's sheet texture matches the current material. */
+export function captureReady(): Promise<void> {
+  return readyFn ? readyFn() : Promise.resolve()
 }
 
 export function captureAvailable(): boolean {

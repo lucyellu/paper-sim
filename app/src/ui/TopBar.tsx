@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../state/store'
 import { ExportDialog } from './ExportDialog'
 import { FitDielineDialog, type FitDielineProps } from './FitDielineDialog'
+import { LibraryDialog } from './LibraryDialog'
+import { onLibraryToast, saveToLibraryWithToast } from './libraryActions'
 import { NewDocDialog } from './NewDocDialog'
 import { PhotoCartonDialog } from './PhotoCartonDialog'
 
@@ -76,8 +78,23 @@ export function TopBar() {
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [fitDialog, setFitDialog] = useState<Pick<FitDielineProps, 'source' | 'session'> | null>(null)
   const [photoDialog, setPhotoDialog] = useState<{ dataUrl: string; fileName: string } | null>(null)
-  const [dialog, setDialog] = useState<'new' | 'export' | null>(null)
+  const [dialog, setDialog] = useState<'new' | 'export' | 'library' | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
+
+  // Library saves run in the background (Ctrl+S, imports): confirm them here.
+  useEffect(() => {
+    let timer: number | undefined
+    const off = onLibraryToast((msg) => {
+      setToast(msg)
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => setToast(null), 2500)
+    })
+    return () => {
+      off()
+      window.clearTimeout(timer)
+    }
+  }, [])
 
   // Click-away closes any open menu.
   useEffect(() => {
@@ -126,7 +143,17 @@ export function TopBar() {
   const fileItems: MenuItemDef[] = [
     { label: 'New…', onClick: () => setDialog('new'), title: 'Start from a template (tuck box, milk carton, can, sleeve…)' },
     { label: 'Open…', onClick: () => fileInput.current?.click(), title: 'Open a PaperSim or FOLD file' },
-    { label: 'Save (.fold)', onClick: () => s.saveFile() },
+    {
+      label: 'Library…',
+      onClick: () => setDialog('library'),
+      title: 'Saved projects and imported dielines — open, rename, delete',
+    },
+    {
+      label: 'Save to library',
+      onClick: () => saveToLibraryWithToast(),
+      title: s.libraryId ? 'Update this project in the library (Ctrl+S)' : 'Add this project to the library (Ctrl+S)',
+    },
+    { label: 'Save (.fold)', onClick: () => s.saveFile(), title: 'Download the project as a .fold file' },
     { label: '', separator: true },
     {
       label: 'Import dieline image…',
@@ -209,6 +236,11 @@ export function TopBar() {
           onClose={() => setOpenMenu(null)}
         />
       ))}
+      {toast && (
+        <span className="topbar-toast" role="status">
+          {toast}
+        </span>
+      )}
       <input
         ref={fileInput}
         type="file"
@@ -252,6 +284,7 @@ export function TopBar() {
         />
       )}
       {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
+      {dialog === 'library' && <LibraryDialog onClose={() => setDialog(null)} />}
       {fitDialog && <FitDielineDialog {...fitDialog} onClose={() => setFitDialog(null)} />}
     </div>
   )
