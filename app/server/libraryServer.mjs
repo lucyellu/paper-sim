@@ -8,13 +8,14 @@
 //                                      (200, not 404: "not saved yet" is routine and a 404
 //                                      would log a console error in the browser)
 //   PUT    /api/library/:id         <- { meta, data }  (upsert; clears a tombstone)
-//   PATCH  /api/library/:id         <- { name, updatedAt? }
+//   PATCH  /api/library/:id         <- { name?, trashedAt?, updatedAt? }  (trashedAt null = restore)
 //   DELETE /api/library/:id[?at=ms] -> tombstone (kept so a cloud sync can propagate it)
 //   DELETE /api/library             -> purge a whole namespace (never "default"; test cleanup)
 //
 // Entries are partitioned by the `x-papersim-ns` header (default "default") so
 // the verify scripts can work in a throwaway namespace without touching the
-// real library. The database lives in <repo>/library/library.db unless
+// real library. The trash is just live entries with trashed_at set; deleting
+// one from the trash is what leaves a tombstone. The database lives in <repo>/library/library.db unless
 // PAPERSIM_LIBRARY_DIR says otherwise.
 
 import { mkdirSync } from 'node:fs'
@@ -47,12 +48,16 @@ async function openDb() {
       created_at  INTEGER NOT NULL,
       updated_at  INTEGER NOT NULL,
       deleted_at  INTEGER,
+      trashed_at  INTEGER,
       thumbnail   TEXT,
       source_name TEXT,
       data        TEXT,
       PRIMARY KEY (ns, id)
     );
   `)
+  // Databases made before the trash existed.
+  const cols = db.prepare('PRAGMA table_info(entries)').all().map((c) => c.name)
+  if (!cols.includes('trashed_at')) db.exec('ALTER TABLE entries ADD COLUMN trashed_at INTEGER')
   return db
 }
 
@@ -67,6 +72,7 @@ function metaOf(row) {
   if (row.thumbnail) m.thumbnail = row.thumbnail
   if (row.source_name) m.sourceName = row.source_name
   if (row.deleted_at) m.deletedAt = row.deleted_at
+  else if (row.trashed_at) m.trashedAt = row.trashed_at
   return m
 }
 
@@ -140,7 +146,7 @@ async function handle(req, res) {
     const all = url.searchParams.get('all') === '1'
     const rows = d
       .prepare(
-        `SELECT id, name, kind, created_at, updated_at, deleted_at, thumbnail, source_name
+        `SELECT id, name, kind, created_at, updated_at, deleted_at, trashed_at, thumbnail, source_name
            FROM entries WHERE ns = ? ${all ? '' : 'AND deleted_at IS NULL'}
           ORDER BY updated_at DESC`,
       )
@@ -161,12 +167,12 @@ async function handle(req, res) {
       }
       const now = Date.now()
       d.prepare(
-        `INSERT INTO entries (ns, id, name, kind, created_at, updated_at, deleted_at, thumbnail, source_name, data)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+        `INSERT INTO entries (ns, id, name, kind, created_at, updated_at, deleted_at, trashed_at, thumbnail, source_name, data)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
          ON CONFLICT (ns, id) DO UPDATE SET
            name = excluded.name, kind = excluded.kind, created_at = excluded.created_at,
-           updated_at = excluded.updated_at, deleted_at = NULL, thumbnail = excluded.thumbnail,
-           source_name = excluded.source_name, data = excluded.data`,
+           updated_at = excluded.updated_at, deleted_at = NULL, trashed_at = excluded.trashed_at,
+           thumbnail = excluded.thumbnail, source_name = excluded.source_name, data = excluded.data`,
       ).run(
         ns,
         id,
@@ -174,6 +180,7 @@ async function handle(req, res) {
         KINDS.has(meta.kind) ? meta.kind : 'project',
         num(meta.createdAt) ?? now,
         num(meta.updatedAt) ?? now,
+        num(meta.trashedAt),
         str(meta.thumbnail),
         str(meta.sourceName),
         JSON.stringify({ file: data.file, fitSession: data.fitSession ?? null }),
@@ -183,10 +190,21 @@ async function handle(req, res) {
     case 'PATCH': {
       const body = await readJson(req)
       const name = str(body.name)?.trim()
-      if (!name) return send(res, 400, { error: 'expected { name }' })
+      const trash = 'trashedAt' in body
+      if (!name && !trash) return send(res, 400, { error: 'expected { name } or { trashedAt }' })
+      const sets = ['updated_at = ?']
+      const args = [num(body.updatedAt) ?? Date.now()]
+      if (name) {
+        sets.push('name = ?')
+        args.push(name)
+      }
+      if (trash) {
+        sets.push('trashed_at = ?')
+        args.push(num(body.trashedAt))
+      }
       const r = d
-        .prepare('UPDATE entries SET name = ?, updated_at = ? WHERE ns = ? AND id = ? AND deleted_at IS NULL')
-        .run(name, num(body.updatedAt) ?? Date.now(), ns, id)
+        .prepare(`UPDATE entries SET ${sets.join(', ')} WHERE ns = ? AND id = ? AND deleted_at IS NULL`)
+        .run(...args, ns, id)
       return send(res, r.changes ? 204 : 404, r.changes ? undefined : { error: 'not found' })
     }
     case 'DELETE': {
@@ -198,7 +216,7 @@ async function handle(req, res) {
          VALUES (?, ?, '', 'project', ?, ?, ?)
          ON CONFLICT (ns, id) DO UPDATE SET
            deleted_at = excluded.deleted_at, updated_at = excluded.updated_at,
-           data = NULL, thumbnail = NULL`,
+           trashed_at = NULL, data = NULL, thumbnail = NULL`,
       ).run(ns, id, at, at, at)
       return send(res, 204)
     }

@@ -6,7 +6,8 @@
 //     delete on the other side, equal stamps → untouched.
 //  2. A second pass changes nothing (idempotent).
 //  3. The gallery shows the pulled entries and the signed-in cloud line.
-//  4. Local edits auto-sync: rename and delete in the gallery reach the remote.
+//  4. Local edits auto-sync: rename, move to trash, and delete forever in the
+//     gallery reach the remote.
 //  5. With no remote and no Supabase config the gallery says sync is off.
 // Usage: node scripts/verify-v20.mjs (dev server running)
 import { chromium } from 'playwright'
@@ -168,6 +169,11 @@ try {
   out.renamePushed = true
   await page.locator('.lib-card[data-lib-id="H"]').click()
   await page.locator('.lib-modal button', { hasText: 'Delete' }).click()
+  await page.waitForFunction(() => !!window.__remote.rows.get('H')?.trashedAt, null, { timeout: 10000 })
+  out.trashPushed = await page.evaluate(() => !window.__remote.rows.get('H').deletedAt)
+  await page.locator('.lib-filter button', { hasText: 'Trash' }).click()
+  await page.locator('.lib-card[data-lib-id="H"]').click()
+  await page.locator('.lib-modal button', { hasText: 'Delete forever' }).click()
   await page.waitForFunction(() => !!window.__remote.rows.get('H')?.deletedAt, null, { timeout: 10000 })
   out.deletePushed = true
 

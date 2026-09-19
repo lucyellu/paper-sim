@@ -88,7 +88,9 @@ starts the dev server if it isn't running and opens the app in the browser.
 - **⊞ toggle** (top right) switches single / quad view (perspective + ortho top/front/side);
   **🌙** toggles dark mode.
 - **Library** (File › Library…, **Ctrl+S** / File › Save to library): a gallery of saved projects
-  with folded 3D thumbnails — double-click to reopen, F2 / Rename, Delete. Imported dieline images
+  with folded 3D thumbnails — double-click to reopen, F2 / Rename, Delete. Delete moves an entry
+  to the **Trash** tab (with an Undo right there); restore it from there, or Delete forever / Empty
+  trash. Anything left in the trash for 30 days is removed for good. Imported dieline images
   and carton photos are added automatically; a dieline import keeps its fit, so File › Re-fit works
   after reopening it (and updates the same entry).
   - **Stored on disk** in `library/library.db` (SQLite, repo root, gitignored), served by the dev
@@ -103,7 +105,7 @@ starts the dev server if it isn't running and opens the app in the browser.
     3. Create `app/.env.local` with `VITE_SUPABASE_URL=https://<ref>.supabase.co` and
        `VITE_SUPABASE_PUBLISHABLE_KEY=<publishable or anon key>`, then restart the dev server.
     4. File › Library… → enter your email → click the sign-in link. Entries then sync both ways
-       (newest change wins; deletes propagate) on sign-in, shortly after each local change, and
+       (newest change wins; trash and deletes propagate) on sign-in, shortly after each local change, and
        when you come back to the tab. The local database stays the primary copy.
 - Files are standard [FOLD](https://github.com/edemaine/fold) JSON with `paperSim:*` extensions.
   **Load** also imports plain FOLD files from other tools (needs `faces_vertices`; authored

@@ -9,7 +9,7 @@ import type { LibraryData, LibraryKind, LibraryMeta } from './library'
 
 const TABLE = 'library_entries'
 const BUCKET = 'library'
-const META_COLS = 'id, name, kind, created_at, updated_at, deleted_at, source_name'
+const META_COLS = 'id, name, kind, created_at, updated_at, deleted_at, trashed_at, source_name'
 
 let client: SupabaseClient | null = null
 
@@ -20,6 +20,7 @@ interface Row {
   created_at: number
   updated_at: number
   deleted_at: number | null
+  trashed_at: number | null
   thumbnail?: string | null
   source_name: string | null
 }
@@ -35,6 +36,7 @@ function metaOf(r: Row): LibraryMeta {
   if (r.thumbnail) m.thumbnail = r.thumbnail
   if (r.source_name) m.sourceName = r.source_name
   if (r.deleted_at) m.deletedAt = Number(r.deleted_at)
+  else if (r.trashed_at) m.trashedAt = Number(r.trashed_at)
   return m
 }
 
@@ -75,6 +77,7 @@ function supabaseRemote(sb: SupabaseClient, userId: string): Remote {
           created_at: meta.createdAt,
           updated_at: meta.updatedAt,
           deleted_at: null,
+          trashed_at: meta.trashedAt ?? null,
           thumbnail: meta.thumbnail ?? null,
           source_name: meta.sourceName ?? null,
         }),
@@ -84,7 +87,7 @@ function supabaseRemote(sb: SupabaseClient, userId: string): Remote {
       check(
         await sb
           .from(TABLE)
-          .update({ deleted_at: at, updated_at: at, thumbnail: null })
+          .update({ deleted_at: at, updated_at: at, trashed_at: null, thumbnail: null })
           .eq('id', id),
       )
       // Best effort: a leftover payload is harmless (the row says deleted).

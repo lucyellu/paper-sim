@@ -6,7 +6,7 @@
 //     (toast, libraryId set, 3D JPEG thumbnail); a second save updates it.
 //  2. File › Save to library on a different project adds a second entry.
 //  3. Double-click a card reopens it (doc + name restored, libraryId set).
-//  4. Rename (F2) and Delete (confirm) work and persist across reloads.
+//  4. Rename (F2) and Delete (to the trash) work and persist across reloads.
 //  5. Import dieline image… auto-adds a 'Dieline import' entry with its fit
 //     session; reopening it keeps Re-fit available, and a re-fit updates the
 //     same entry instead of adding one.
@@ -187,8 +187,8 @@ try {
   await start({ 'paperSim.libraryNs': nsDisk, 'paperSim.libraryBackend': null })
   results.disk = await suite('disk')
   const rows = await diskList(nsDisk)
-  results.disk.rowsOnDisk = rows.filter((m) => !m.deletedAt).length === (existsSync(CHERRY) ? 2 : 1)
-  results.disk.tombstoneKept = rows.some((m) => m.deletedAt)
+  results.disk.rowsOnDisk = rows.filter((m) => !m.deletedAt && !m.trashedAt).length === (existsSync(CHERRY) ? 2 : 1)
+  results.disk.trashedKept = rows.some((m) => m.trashedAt && !m.deletedAt)
   await context.close()
 
   // IndexedDB fallback.
@@ -203,7 +203,7 @@ try {
   await page.waitForFunction(() => window.paperSim && window.paperSimViewer)
   await openLibrary()
   const migrated = await diskList(nsMigrate)
-  const live = migrated.filter((m) => !m.deletedAt)
+  const live = migrated.filter((m) => !m.deletedAt && !m.trashedAt)
   results.migrate = {
     location: (await page.locator('.lib-where').getAttribute('data-location')) === 'disk',
     copied: live.length === (existsSync(CHERRY) ? 2 : 1) && live.some((m) => m.id === inBrowser),

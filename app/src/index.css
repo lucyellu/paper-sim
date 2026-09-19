@@ -1567,6 +1567,41 @@ button.dlg-go {
 .lib-actions {
   flex-wrap: wrap;
 }
+.lib-count {
+  display: inline-block;
+  margin-left: 5px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.1);
+}
+button.active .lib-count {
+  background: rgba(255, 255, 255, 0.3);
+}
+.lib-card.trashed img,
+.lib-card.trashed .lib-nothumb {
+  opacity: 0.55;
+  filter: grayscale(0.6);
+}
+.lib-trash-note {
+  margin: 0 4px 8px;
+}
+.lib-undo {
+  margin: 8px 4px 0;
+}
+.lib-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
 .lib-spacer {
   flex: 1;
 }

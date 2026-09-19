@@ -12,7 +12,7 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs && node scripts/verify-v13.mjs && node scripts/verify-v14.mjs && node scripts/verify-v15.mjs && node scripts/verify-v16.mjs && node scripts/verify-v17.mjs && node scripts/verify-v18.mjs && node scripts/verify-v19.mjs && node scripts/verify-v20.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs && node scripts/verify-v13.mjs && node scripts/verify-v14.mjs && node scripts/verify-v15.mjs && node scripts/verify-v16.mjs && node scripts/verify-v17.mjs && node scripts/verify-v18.mjs && node scripts/verify-v19.mjs && node scripts/verify-v20.mjs && node scripts/verify-v21.mjs`
    Product direction lives in `VISION.md` (pillars, product ladder, what's parked).
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
@@ -266,7 +266,17 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 
 *(newest first)*
 
-- **2026-09-18 (latest)** — **Library → local SQLite database + optional Supabase sync.**
+- **2026-09-18 (latest)** — **Library trash.** Delete in the gallery no longer erases: it sets
+  `trashedAt` (payload + thumbnail kept, `updatedAt` bumped so sync carries it like an edit) and
+  the entry moves to a 4th filter tab, **Trash (n)**. No confirm on Delete; an inline "Moved … to
+  the trash. Undo" re-links the open project if it was the one deleted (trashing unlinks it so
+  Ctrl+S doesn't silently un-trash it). Trash tab: Restore (Enter), Delete forever (Delete key,
+  confirm), Empty trash (confirm) — these leave the old tombstone. Entries trashed ≥ `TRASH_DAYS`
+  (30) ago are tombstoned when the gallery opens (`purgeExpiredTrash`). Disk: new `trashed_at`
+  column (added by `ALTER TABLE` to existing databases), `PATCH` takes `{ trashedAt }` (null =
+  restore). Supabase: `trashed_at` column in `library.sql` (+ `add column if not exists`).
+  `verify-v21.mjs` (disk + IndexedDB); v19/v20 updated for the new Delete.
+- **2026-09-18** — **Library → local SQLite database + optional Supabase sync.**
   - Disk: `app/server/libraryServer.mjs`, a Vite plugin (dev + preview) serving `/api/library`
     from `<repo>/library/library.db` via `node:sqlite` (no native deps; Node 22.13+). Rows are
     namespaced by the `x-papersim-ns` header (verify scripts use throwaway namespaces and purge

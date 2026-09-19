@@ -3,7 +3,8 @@
 -- user sees only their own rows / files (RLS). Row = gallery metadata +
 -- thumbnail; the project itself ({ file, fitSession } JSON, often several MB of
 -- inline artwork) lives in the private `library` storage bucket at
--- <user id>/<entry id>.json. Deletes are tombstones (deleted_at) so they sync.
+-- <user id>/<entry id>.json. Entries in the app's trash keep their data and
+-- have trashed_at set; permanent deletes are tombstones (deleted_at) so they sync.
 
 create table if not exists public.library_entries (
   user_id     uuid   not null default auth.uid() references auth.users (id) on delete cascade,
@@ -13,10 +14,13 @@ create table if not exists public.library_entries (
   created_at  bigint not null,  -- ms since epoch, as in the app
   updated_at  bigint not null,
   deleted_at  bigint,
+  trashed_at  bigint,
   thumbnail   text,
   source_name text,
   primary key (user_id, id)
 );
+-- Tables created before the trash existed.
+alter table public.library_entries add column if not exists trashed_at bigint;
 
 alter table public.library_entries enable row level security;
 

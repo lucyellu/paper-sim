@@ -6,8 +6,11 @@
 // falls back to the browser's IndexedDB. Entries saved to IndexedDB before the
 // disk database existed are copied over once.
 //
-// Deletes leave tombstones (meta with `deletedAt`) so a cloud sync can pass
-// them on; list functions hide them unless asked (`listAllLibrary`).
+// Deleting from the gallery moves an entry to the trash (`trashedAt` set, data
+// kept) so it can be restored; the trash empties itself after TRASH_DAYS.
+// Deleting from the trash is permanent and leaves a tombstone (meta with
+// `deletedAt`, no data) so a cloud sync can pass it on. Moving in and out of
+// the trash bumps `updatedAt`, so sync carries it like any other edit.
 
 import type { FitSession } from '../model/dielineFit'
 import type { SaveFile } from '../model/foldfile'
@@ -25,9 +28,14 @@ export interface LibraryMeta {
   thumbnail?: string
   /** File name of the imported picture (imports only). */
   sourceName?: string
+  /** Set while the entry is in the trash. */
+  trashedAt?: number
   /** Set on tombstones (deleted entries kept for sync). */
   deletedAt?: number
 }
+
+/** Entries left in the trash this long are deleted for good. */
+export const TRASH_DAYS = 30
 
 export interface LibraryData {
   id: string
@@ -49,6 +57,7 @@ interface Backend {
   getData(id: string): Promise<LibraryData | undefined>
   put(meta: LibraryMeta, data: LibraryData): Promise<void>
   rename(id: string, name: string, updatedAt: number): Promise<void>
+  setTrashed(id: string, trashedAt: number | null, updatedAt: number): Promise<void>
   tombstone(id: string, at: number): Promise<void>
 }
 
@@ -100,6 +109,9 @@ function diskBackend(path: string): Backend {
     },
     rename: async (id, name, updatedAt) => {
       await api(`/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name, updatedAt }) })
+    },
+    setTrashed: async (id, trashedAt, updatedAt) => {
+      await api(`/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ trashedAt, updatedAt }) })
     },
     tombstone: async (id, at) => {
       await api(`/${encodeURIComponent(id)}?at=${at}`, { method: 'DELETE' })
@@ -183,6 +195,17 @@ const browserBackend: Backend = {
     if (meta && !meta.deletedAt) store.put({ ...meta, name, updatedAt })
     await txDone(tx)
   },
+  setTrashed: async (id, trashedAt, updatedAt) => {
+    const db = await openDb()
+    const tx = db.transaction('meta', 'readwrite')
+    const store = tx.objectStore('meta')
+    const meta = await request(store.get(id) as IDBRequest<LibraryMeta | undefined>)
+    if (meta && !meta.deletedAt) {
+      const { trashedAt: _, ...rest } = meta
+      store.put(trashedAt === null ? { ...rest, updatedAt } : { ...rest, trashedAt, updatedAt })
+    }
+    await txDone(tx)
+  },
   tombstone: async (id, at) => {
     const db = await openDb()
     const tx = db.transaction(['meta', 'data'], 'readwrite')
@@ -250,10 +273,18 @@ export async function libraryLocation(): Promise<LibraryLocation> {
   return (await backend()).location
 }
 
-/** Every live entry's metadata, most recently updated first. */
+/** Every live entry outside the trash, most recently updated first. */
 export async function listLibrary(): Promise<LibraryMeta[]> {
   const all = await (await backend()).listAll()
-  return all.filter((m) => !m.deletedAt).sort((a, b) => b.updatedAt - a.updatedAt)
+  return all.filter((m) => !m.deletedAt && !m.trashedAt).sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+/** Entries in the trash, most recently trashed first. */
+export async function listTrash(): Promise<(LibraryMeta & { trashedAt: number })[]> {
+  const all = await (await backend()).listAll()
+  return all
+    .filter((m): m is LibraryMeta & { trashedAt: number } => !m.deletedAt && !!m.trashedAt)
+    .sort((a, b) => b.trashedAt - a.trashedAt)
 }
 
 /** Every entry including deletion tombstones (for sync). */
@@ -284,7 +315,35 @@ export async function renameLibraryEntry(id: string, name: string): Promise<void
   notify(id)
 }
 
-/** Delete an entry (leaves a tombstone at `at`, default now). */
+/** Move an entry to the trash (restorable until it expires or is deleted). */
+export async function trashLibraryEntry(id: string): Promise<void> {
+  const now = Date.now()
+  await (await backend()).setTrashed(id, now, now)
+  notify(id)
+}
+
+/** Take an entry back out of the trash. */
+export async function restoreLibraryEntry(id: string): Promise<void> {
+  await (await backend()).setTrashed(id, null, Date.now())
+  notify(id)
+}
+
+/** Permanently delete everything in the trash; returns how many went. */
+export async function emptyTrash(): Promise<number> {
+  const gone = await listTrash()
+  for (const m of gone) await deleteLibraryEntry(m.id)
+  return gone.length
+}
+
+/** Permanently delete trash older than TRASH_DAYS (run when the gallery opens). */
+export async function purgeExpiredTrash(now = Date.now()): Promise<number> {
+  const cutoff = now - TRASH_DAYS * 24 * 60 * 60 * 1000
+  const old = (await listTrash()).filter((m) => m.trashedAt <= cutoff)
+  for (const m of old) await deleteLibraryEntry(m.id)
+  return old.length
+}
+
+/** Delete an entry for good (leaves a tombstone at `at`, default now). */
 export async function deleteLibraryEntry(id: string, opts: { at?: number; quiet?: boolean } = {}): Promise<void> {
   await (await backend()).tombstone(id, opts.at ?? Date.now())
   notify(opts.quiet ? undefined : id)
