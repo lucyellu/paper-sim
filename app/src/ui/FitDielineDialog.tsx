@@ -9,7 +9,7 @@
 // comes from the builder; the picture supplies measurements and artwork.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ARCHETYPES, ARCHETYPE_IDS, type ArchetypeId } from '../model/archetypes'
+import { ARCHETYPES, ARCHETYPE_IDS, archetypeOptions, type ArchetypeId } from '../model/archetypes'
 import {
   analyzeDielineImage,
   findPieces,
@@ -24,7 +24,9 @@ import {
   fitLetterHeight,
   fitPlacement,
   fitParams,
+  foldedStrip,
   foregroundMask,
+  guessFoldedAway,
   initialFit,
   looksLikeCross,
   looksLikeGable,
@@ -32,8 +34,10 @@ import {
   overlayFromMap,
   sharpHeight,
   sheetSize,
+  withFoldedAway,
   type CropRect,
   type FitSession,
+  type FoldedAway,
   type ImageGuides,
 } from '../model/dielineFit'
 import { defaultMaterial } from '../model/material'
@@ -71,6 +75,54 @@ export interface FitDielineProps {
   onClose: () => void
 }
 
+/** The picture the fit step shows and the box prints: `ox` px added on the left. */
+interface Art {
+  src: CanvasImageSource
+  w: number
+  h: number
+  ox: number
+}
+
+/** Median color of the drawing inside the image-px rect (the paper, on most panels). */
+function paperColor(b: Baked, x0: number, y0: number, x1: number, y1: number): string {
+  const ch: number[][] = [[], [], []]
+  const step = Math.max(1, Math.round(Math.max(x1 - x0, y1 - y0) / 60))
+  for (let y = Math.max(0, Math.round(y0)); y < Math.min(b.h, y1); y += step) {
+    for (let x = Math.max(0, Math.round(x0)); x < Math.min(b.w, x1); x += step) {
+      if (!b.mask[y * b.w + x]) continue
+      for (let k = 0; k < 3; k++) ch[k].push(b.pixels[(y * b.w + x) * 4 + k])
+    }
+  }
+  if (!ch[0].length) return '#ffffff'
+  const med = (a: number[]) => a.sort((p, q) => p - q)[a.length >> 1]
+  return `rgb(${med(ch[0])},${med(ch[1])},${med(ch[2])})`
+}
+
+/**
+ * The picture with a folded-away end panel's strip painted plain paper (its
+ * twin panel's color), widened to reach the copied column and glue flap.
+ */
+function composeArt(b: Baked, real: ImageGuides, eff: ImageGuides, folded: FoldedAway): Art {
+  const strip = foldedStrip(real, folded)
+  if (!strip) return { src: b.el, w: b.w, h: b.h, ox: 0 }
+  const xs = Object.values(eff.x)
+  const m = b.w * 0.02
+  const x0 = Math.floor(Math.min(0, Math.min(...xs) - m))
+  const x1 = Math.ceil(Math.max(b.w, Math.max(...xs) + m))
+  const c = document.createElement('canvas')
+  c.width = x1 - x0
+  c.height = b.h
+  const ctx = c.getContext('2d')!
+  ctx.drawImage(b.el, -x0, 0)
+  const twin = folded === 'last' ? [real.x.c1, real.x.c2] : [real.x.c2, real.x.c3]
+  const inset = (twin[1] - twin[0]) * 0.1
+  ctx.fillStyle = paperColor(b, twin[0] + inset, real.y.bodyH, twin[1] - inset, real.y.body0)
+  const a = Math.max(x0, strip.x0)
+  const z = Math.min(x1, strip.x1)
+  ctx.fillRect(a - x0, 0, z - a, b.h)
+  return { src: c, w: c.width, h: b.h, ox: -x0 }
+}
+
 /** A copy of `src` whose longer side is at most `max` px. */
 function downscaled(src: HTMLCanvasElement, max: number): HTMLCanvasElement {
   const s = Math.min(1, max / Math.max(src.width, src.height, 1))
@@ -83,11 +135,31 @@ function downscaled(src: HTMLCanvasElement, max: number): HTMLCanvasElement {
 
 const pixels = (c: HTMLCanvasElement) => c.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, c.width, c.height)
 
-/** The separate drawings in `src`, biggest first, in `src` px. */
-function detectPieces(src: HTMLCanvasElement): Piece[] {
+/**
+ * The separate drawings in `src`, biggest first, in `src` px, and whether
+ * smaller marks (a logo, a caption) lie clearly outside the biggest one.
+ */
+function detectPieces(src: HTMLCanvasElement): { pieces: Piece[]; stray: boolean } {
   const low = downscaled(src, PIECE_MAX)
   const k = src.width / low.width
-  return findPieces(pixels(low)).pieces.map((p) => ({ ...p, x: p.x * k, y: p.y * k, w: p.w * k, h: p.h * k }))
+  const pm = findPieces(pixels(low))
+  const pieces = pm.pieces.map((p) => ({ ...p, x: p.x * k, y: p.y * k, w: p.w * k, h: p.h * k }))
+  const main = pm.pieces[0]
+  let stray = false
+  if (main) {
+    const mx = low.width * 0.02
+    const my = low.height * 0.02
+    for (let y = 0; y < pm.height && !stray; y++) {
+      for (let x = 0; x < pm.width; x++) {
+        if (!pm.labels[y * pm.width + x] || pm.labels[y * pm.width + x] === main.label) continue
+        if (x < main.x - mx || x > main.x + main.w + mx || y < main.y - my || y > main.y + main.h + my) {
+          stray = true
+          break
+        }
+      }
+    }
+  }
+  return { pieces, stray }
 }
 
 /** Crop around a piece with a small margin, inside the picture. */
@@ -149,6 +221,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   const [guidesBy, setGuidesBy] = useState<Partial<Record<ArchetypeId, ImageGuides>>>(
     session ? { [session.archetype]: session.guides } : {},
   )
+  const [folded, setFolded] = useState<FoldedAway>(session?.folded ?? 'none')
   const [sizeMode, setSizeMode] = useState<SizeMode>(session ? 'manual' : 'fit')
   const [manualH, setManualH] = useState(session?.heightCm ?? 10)
   const [busy, setBusy] = useState(false)
@@ -177,18 +250,29 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   const arch = ARCHETYPES[archId]
   const params = paramsBy[archId] ?? arch.defaults
   const guides = guidesBy[archId] ?? null
+  const hasColumns = guides?.x.c4 !== undefined
+  // The guides the box is fitted with: as dragged, plus a folded-away end
+  // panel's column copied from its twin.
+  const eff = useMemo(
+    () => (guides ? withFoldedAway(guides, hasColumns ? folded : 'none', arch.glueSide(params)) : null),
+    [guides, folded, hasColumns, arch, params],
+  )
+  const art = useMemo(
+    () => (baked && guides && eff ? composeArt(baked, guides, eff, hasColumns ? folded : 'none') : null),
+    [baked, guides, eff, folded, hasColumns],
+  )
 
   // ---- Sizing ---------------------------------------------------------------
-  const fitH = useMemo(() => (guides ? fitLetterHeight(arch, guides, params) : 10), [arch, guides, params])
-  const sharpH = guides ? Math.min(sharpHeight(guides), fitH) : 10
+  const fitH = useMemo(() => (eff ? fitLetterHeight(arch, eff, params) : 10), [arch, eff, params])
+  const sharpH = eff ? Math.min(sharpHeight(eff), fitH) : 10
   const heightCm = sizeMode === 'fit' ? fitH : sizeMode === 'sharp' ? sharpH : manualH
   const fitted = useMemo(() => {
-    if (!guides) return null
-    const { params: p, mismatch } = fitParams(arch, guides, heightCm, params)
+    if (!eff) return null
+    const { params: p, mismatch } = fitParams(arch, eff, heightCm, params)
     const doc = arch.build(p)
-    return { params: p, mismatch, doc, sheet: sheetSize(doc), maps: faceImageMaps(arch, p, doc, guides) }
-  }, [arch, guides, heightCm, params])
-  const dpi = guides ? artDpi(guides, heightCm) : 0
+    return { params: p, mismatch, doc, sheet: sheetSize(doc), maps: faceImageMaps(arch, p, doc, eff) }
+  }, [arch, eff, heightCm, params])
+  const dpi = eff ? artDpi(eff, heightCm) : 0
   // The print canvas caps the art resolution too (≈4096 px across the sheet).
   const texDpi = fitted ? (4096 / Math.max(fitted.sheet.w, fitted.sheet.h)) * 2.54 : Infinity
   const printDpi = Math.min(dpi, texDpi)
@@ -196,15 +280,18 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   // ---- Prep -----------------------------------------------------------------
   const rotated = useMemo(() => (srcImg ? bake(srcImg, rotation, flipH, null) : null), [srcImg, rotation, flipH])
   const prepScale = rotated ? Math.min(VIEW_W / rotated.width, VIEW_H / rotated.height) : 1
-  const pieces = useMemo(() => (rotated ? detectPieces(rotated) : []), [rotated])
+  const detected = useMemo(() => (rotated ? detectPieces(rotated) : { pieces: [], stray: false }), [rotated])
+  const pieces = detected.pieces
   const picked =
     isolate && crop && rotated ? pieces.findIndex((p) => sameRect(crop, pieceCrop(p, rotated.width, rotated.height))) : -1
 
-  // Several drawings: start on the biggest (usually the dieline); a click picks another.
+  // Several drawings: start on the biggest (usually the dieline); a click picks
+  // another. One drawing with small marks outside it (a logo, a caption): pick
+  // it too, so the marks are painted out and don't stretch the guides.
   useEffect(() => {
-    if (session || !rotated || pieces.length < 2) return
+    if (session || !rotated || !(pieces.length >= 2 || (pieces.length === 1 && detected.stray))) return
     pickPiece(pieces[0])
-  }, [pieces])
+  }, [detected])
 
   function pickPiece(p: Piece) {
     if (!rotated) return
@@ -284,9 +371,13 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
         }
         setParamsBy(nextParams)
         setGuidesBy(nextGuides)
-        setArchId(
-          looksLikeCross(mask, b.w, b.h) ? 'cross' : looksLikeGable(nextGuides.tuck!, mask, b.w, b.h) ? 'gable' : 'tuck',
-        )
+        const pick = looksLikeCross(mask, b.w, b.h)
+          ? 'cross'
+          : looksLikeGable(nextGuides.tuck!, mask, b.w, b.h)
+            ? 'gable'
+            : 'tuck'
+        setArchId(pick)
+        setFolded(pick === 'cross' ? 'none' : guessFoldedAway(nextGuides.tuck!, mask, b.w, b.h))
         setSizeMode('fit')
       }
       setStep('fit')
@@ -298,7 +389,10 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   }
 
   // ---- Fit canvas -------------------------------------------------------------
-  const fitScale = baked ? Math.min(VIEW_W / baked.w, VIEW_H / baked.h) : 1
+  const fitScale = art ? Math.min(VIEW_W / art.w, VIEW_H / art.h) : 1
+  const ox = art?.ox ?? 0
+  /** Guides the user can drag (a folded-away panel's copied ones can't be). */
+  const draggable = (id: string) => !eff || !guides || eff.x[id] === guides.x[id]
   // Guides that keep their order while dragged: every x-guide in one chain
   // (left to right); y-guides top to bottom within each of the archetype's groups.
   const chains = useMemo(() => {
@@ -314,12 +408,12 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
 
   useEffect(() => {
     const c = fitRef.current
-    if (step !== 'fit' || !c || !baked || !guides || !fitted) return
-    c.width = Math.round(baked.w * fitScale)
-    c.height = Math.round(baked.h * fitScale)
+    if (step !== 'fit' || !c || !baked || !guides || !eff || !art || !fitted) return
+    c.width = Math.round(art.w * fitScale)
+    c.height = Math.round(art.h * fitScale)
     const s = fitScale
     const ctx = c.getContext('2d')!
-    ctx.drawImage(baked.el, 0, 0, c.width, c.height)
+    ctx.drawImage(art.src, 0, 0, c.width, c.height)
     ctx.fillStyle = 'rgba(255,255,255,0.18)'
     ctx.fillRect(0, 0, c.width, c.height)
 
@@ -328,7 +422,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     const kindOf = new Map(fitted.doc.edges.map((e) => [Math.min(e.v1, e.v2) + ':' + Math.max(e.v1, e.v2), e.kind]))
     for (const face of fitted.doc.faces) {
       const m = fitted.maps.get(face.id)!
-      const pts = face.vertexIds.map((id) => ({ x: m.ax * pos.get(id)!.x + m.bx, y: m.ay * pos.get(id)!.y + m.by }))
+      const pts = face.vertexIds.map((id) => ({ x: m.ax * pos.get(id)!.x + m.bx + ox, y: m.ay * pos.get(id)!.y + m.by }))
       face.vertexIds.forEach((v1, i) => {
         const v2 = face.vertexIds[(i + 1) % face.vertexIds.length]
         const kind = kindOf.get(Math.min(v1, v2) + ':' + Math.max(v1, v2))
@@ -350,15 +444,19 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
 
     // Guide lines (thin, full length) with labels.
     ctx.font = '11px system-ui, sans-serif'
-    for (const [id, x] of Object.entries(guides.x)) {
-      ctx.strokeStyle = id === 'glue' ? 'rgba(147,51,234,0.8)' : 'rgba(234,88,12,0.8)'
+    for (const [id, gx] of Object.entries(eff.x)) {
+      const x = gx + ox
+      const fixed = !draggable(id)
+      ctx.strokeStyle = fixed ? 'rgba(120,113,108,0.7)' : id === 'glue' ? 'rgba(147,51,234,0.8)' : 'rgba(234,88,12,0.8)'
       ctx.lineWidth = 1
+      ctx.setLineDash(fixed ? [3, 3] : [])
       ctx.beginPath()
       ctx.moveTo(x * s, 0)
       ctx.lineTo(x * s, c.height)
       ctx.stroke()
+      ctx.setLineDash([])
       ctx.fillStyle = ctx.strokeStyle
-      ctx.fillRect(x * s - 4, 0, 8, 10)
+      if (!fixed) ctx.fillRect(x * s - 4, 0, 8, 10)
     }
     for (const [id, y] of Object.entries(guides.y)) {
       ctx.strokeStyle = 'rgba(8,145,178,0.85)'
@@ -375,18 +473,18 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     }
 
     // Whole-grid handles: move (circle, body center) and scale (square, body corner).
-    const mv = moveHandle(guides)
-    const sc = scaleHandle(guides)
+    const mv = moveHandle(eff)
+    const sc = scaleHandle(eff)
     ctx.fillStyle = '#f59e0b'
     ctx.strokeStyle = '#111'
     ctx.lineWidth = 1.5
     ctx.beginPath()
-    ctx.arc(mv.x * s, mv.y * s, 8, 0, Math.PI * 2)
+    ctx.arc((mv.x + ox) * s, mv.y * s, 8, 0, Math.PI * 2)
     ctx.fill()
     ctx.stroke()
-    ctx.fillRect(sc.x * s - 7, sc.y * s - 7, 14, 14)
-    ctx.strokeRect(sc.x * s - 7, sc.y * s - 7, 14, 14)
-  }, [step, baked, guides, fitted, fitScale, heightCm, yLabels, chains])
+    ctx.fillRect((sc.x + ox) * s - 7, sc.y * s - 7, 14, 14)
+    ctx.strokeRect((sc.x + ox) * s - 7, sc.y * s - 7, 14, 14)
+  }, [step, baked, guides, eff, art, ox, fitted, fitScale, heightCm, yLabels, chains])
 
   function setGuides(g: ImageGuides) {
     setGuidesBy((prev) => ({ ...prev, [archId]: g }))
@@ -397,20 +495,27 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     return { x: ((e.clientX - r.left) / r.width) * w, y: ((e.clientY - r.top) / r.height) * h }
   }
 
+  /** Fit canvas pointer → picture px (the view may be widened on the left by `ox`). */
+  function toFitPx(e: React.PointerEvent<HTMLCanvasElement>, a: Art) {
+    const p = toImagePx(e, a.w, a.h)
+    return { x: p.x - a.ox, y: p.y }
+  }
+
   function onFitDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!baked || !guides) return
-    const p = toImagePx(e, baked.w, baked.h)
-    const view = e.currentTarget.getBoundingClientRect().width / baked.w
+    if (!baked || !guides || !eff || !art) return
+    const p = toFitPx(e, art)
+    const view = e.currentTarget.getBoundingClientRect().width / art.w
     const d = (a: { x: number; y: number }) => Math.hypot(a.x - p.x, a.y - p.y) * view
-    const sc = scaleHandle(guides)
+    const sc = scaleHandle(eff)
     if (d(sc) < HANDLE_HIT) {
-      const anchor = { x: guides.x.c0, y: guides.y.bodyH }
+      const anchor = { x: eff.x.c0, y: guides.y.bodyH }
       dragRef.current = { kind: 'scale', anchor, start: Math.hypot(sc.x - anchor.x, sc.y - anchor.y), guides }
-    } else if (d(moveHandle(guides)) < HANDLE_HIT) {
+    } else if (d(moveHandle(eff)) < HANDLE_HIT) {
       dragRef.current = { kind: 'move', last: p }
     } else {
       let best: { kind: 'x' | 'y'; id: string; dist: number } | null = null
       for (const [id, x] of Object.entries(guides.x)) {
+        if (!draggable(id)) continue
         const dist = Math.abs(x - p.x) * view
         if (dist < GUIDE_HIT && (!best || dist < best.dist)) best = { kind: 'x', id, dist }
       }
@@ -426,11 +531,11 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
 
   function onFitMove(e: React.PointerEvent<HTMLCanvasElement>) {
     const drag = dragRef.current
-    if (!drag || !baked || !guides) {
-      if (baked && guides) e.currentTarget.style.cursor = hoverCursor(toImagePx(e, baked.w, baked.h), e)
+    if (!drag || !baked || !guides || !art) {
+      if (baked && guides && art) e.currentTarget.style.cursor = hoverCursor(toFitPx(e, art), e)
       return
     }
-    const p = toImagePx(e, baked.w, baked.h)
+    const p = toFitPx(e, art)
     if (drag.kind === 'x') setGuides({ ...guides, x: { ...guides.x, [drag.id]: clampX(guides, drag.id, p.x) } })
     else if (drag.kind === 'y') setGuides({ ...guides, y: { ...guides.y, [drag.id]: clampY(guides, drag.id, p.y) } })
     else if (drag.kind === 'move') {
@@ -446,12 +551,12 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   }
 
   function hoverCursor(p: { x: number; y: number }, e: React.PointerEvent<HTMLCanvasElement>): string {
-    if (!guides || !baked) return 'default'
-    const view = e.currentTarget.getBoundingClientRect().width / baked.w
+    if (!guides || !eff || !art) return 'default'
+    const view = e.currentTarget.getBoundingClientRect().width / art.w
     const near = (a: { x: number; y: number }) => Math.hypot(a.x - p.x, a.y - p.y) * view < HANDLE_HIT
-    if (near(scaleHandle(guides))) return 'nwse-resize'
-    if (near(moveHandle(guides))) return 'move'
-    if (Object.values(guides.x).some((x) => Math.abs(x - p.x) * view < GUIDE_HIT)) return 'col-resize'
+    if (near(scaleHandle(eff))) return 'nwse-resize'
+    if (near(moveHandle(eff))) return 'move'
+    if (Object.entries(guides.x).some(([id, x]) => draggable(id) && Math.abs(x - p.x) * view < GUIDE_HIT)) return 'col-resize'
     if (Object.values(guides.y).some((y) => Math.abs(y - p.y) * view < GUIDE_HIT)) return 'row-resize'
     return 'default'
   }
@@ -483,28 +588,31 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   function setOption(key: string, value: string) {
     const next = arch.withOptions(params, { [key]: value })
     setParamsBy((prev) => ({ ...prev, [archId]: next }))
-    // Glue side / panel order change which strip is which: re-guess columns.
-    if (baked && guides && (key === 'glueSide' || key === 'order')) {
+    // The glue side changes which strip is which: re-guess columns. (The lid
+    // panel doesn't: the columns are already on the picture's folds.)
+    if (baked && guides && key === 'glueSide') {
       const f = initialFit(archId, next, baked.analysis, baked.w, baked.h, baked.mask, true, baked.pixels)
       setGuides({ x: f.guides.x, y: guides.y })
     }
   }
 
   function build() {
-    if (!baked || !guides || !fitted) return
+    if (!baked || !guides || !eff || !art || !fitted) return
     const st = useAppStore.getState()
     st.newDocument(arch.template, fitted.params as TemplateDims)
     const doc = useAppStore.getState().doc
     useAppStore.getState().setProjectName(projectNameFromFileName(fileName))
     // Each panel shows its own part of the picture, even where the picture's
-    // panels disagree with the box's (averaged) sizes.
-    const maps = faceImageMaps(arch, fitted.params, doc, guides)
-    const place = fitPlacement(doc, maps, guides, heightCm)
+    // panels disagree with the box's (averaged) sizes. The art is the picture
+    // as shown (a folded-away panel painted plain), so guides shift by `ox`.
+    const g = mapGuides(eff, (x) => x + ox, (y) => y)
+    const maps = faceImageMaps(arch, fitted.params, doc, g)
+    const place = fitPlacement(doc, maps, g, heightCm)
     useAppStore.getState().setMaterial({
       ...defaultMaterial(),
       baseColor: '#ffffff',
-      overlayImage: baked.url,
-      overlayTransform: overlayFromMap(doc, place, baked.w, baked.h),
+      overlayImage: art.src instanceof HTMLCanvasElement ? art.src.toDataURL('image/png') : baked.url,
+      overlayTransform: overlayFromMap(doc, place, art.w, art.h),
     })
     useAppStore.getState().setUVEdits(faceRegistration(doc, maps, place))
     useAppStore.getState().setFitSession({
@@ -521,6 +629,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
       params: fitted.params,
       guides,
       heightCm,
+      folded: hasColumns ? folded : 'none',
     })
     onClose()
   }
@@ -608,7 +717,9 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
               </p>
               {picked >= 0 && (
                 <p className="hint" data-testid="picked-piece">
-                  Using drawing {picked + 1} of {pieces.length}.
+                  {pieces.length > 1
+                    ? `Using drawing ${picked + 1} of ${pieces.length}.`
+                    : 'Using the dieline; the small marks outside it are painted out. “Whole image” keeps them.'}
                 </p>
               )}
               <div className="btn-row">
@@ -648,6 +759,8 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
                 data-img-w={baked?.w}
                 data-img-h={baked?.h}
                 data-guides={guides ? JSON.stringify(guides) : undefined}
+                data-view-ox={ox}
+                data-view-w={art?.w}
                 onPointerDown={onFitDown}
                 onPointerMove={onFitMove}
                 onPointerUp={endDrag}
@@ -665,7 +778,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
                   ))}
                 </div>
               </div>
-              {arch.options.map((o) => (
+              {archetypeOptions(arch, params).map((o) => (
                 <div key={o.key} className="photo-field fit-field">
                   <span>{o.label}</span>
                   <div className="seg">
@@ -682,6 +795,34 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
                   </div>
                 </div>
               ))}
+              {hasColumns && (
+                <div className="photo-field fit-field">
+                  <span>Drawn flat</span>
+                  <div className="seg">
+                    {(
+                      [
+                        ['none', 'All 4 panels'],
+                        ['last', 'Panel 4 folded away'],
+                        ['first', 'Panel 1 folded away'],
+                      ] as const
+                    ).map(([v, label]) => (
+                      <button
+                        key={v}
+                        data-folded={v}
+                        className={folded === v ? 'active' : ''}
+                        title={
+                          v === 'none'
+                            ? undefined
+                            : 'The picture shows this panel folded back (a mockup view): it gets its twin panel’s size and prints plain.'
+                        }
+                        onClick={() => setFolded(v)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {mismatch > 0.08 && (
                 <p className="hint photo-warn" data-testid="fit-mismatch">
                   The picture’s matching panels differ by {Math.round(mismatch * 100)}% — the box uses

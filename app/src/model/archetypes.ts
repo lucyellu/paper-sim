@@ -51,7 +51,8 @@ export interface Archetype<P> {
   /** Store template to build with (also picks the authored fold steps). */
   template: Template
   defaults: P
-  options: ArchetypeOption[]
+  /** Layout toggles; a function when choice labels depend on the params. */
+  options: ArchetypeOption[] | ((p: P) => ArchetypeOption[])
   optionsOf(p: P): Record<string, string>
   withOptions(p: P, o: Record<string, string>): P
   /** Which side the glue flap sits on for these params (drives column guessing). */
@@ -76,6 +77,16 @@ export interface Archetype<P> {
    * region is read off these guides only.
    */
   faceScope?(faceName: string): { x: string[]; y: string[] }
+}
+
+/** The archetype's layout toggles for these params. */
+export function archetypeOptions<P>(arch: Archetype<P>, p: P): ArchetypeOption[] {
+  return typeof arch.options === 'function' ? arch.options(p) : arch.options
+}
+
+/** Tuck box: the flat column (1..4) carrying the top lid. */
+function topLidPanel(p: TuckParams): number {
+  return resolveTuck(p).topLidCol + 1
 }
 
 /** Column guide ids, flat order. */
@@ -111,48 +122,49 @@ const tuck: Archetype<TuckParams> = {
   label: 'Tuck-end box',
   template: 'tuckbox',
   defaults: { width: 6, depth: 3, height: 9, style: 'reverse', order: 'front-first', glueSide: 'right', lidOn: 'first' },
-  options: [
-    {
-      key: 'style',
-      label: 'Lids',
-      choices: [
-        { value: 'reverse', label: 'Reverse (opposite panels)' },
-        { value: 'straight', label: 'Straight (same panel)' },
-      ],
-    },
-    {
-      key: 'order',
-      label: 'First panel',
-      choices: [
-        { value: 'front-first', label: 'Wide' },
-        { value: 'side-first', label: 'Narrow' },
-      ],
-    },
-    {
-      key: 'lidOn',
-      label: 'Top lid on',
-      choices: [
-        { value: 'first', label: '1st wide panel' },
-        { value: 'second', label: '2nd wide panel' },
-      ],
-    },
-    {
-      key: 'glueSide',
-      label: 'Glue flap',
-      choices: [
-        { value: 'left', label: 'Left' },
-        { value: 'right', label: 'Right' },
-      ],
-    },
-  ],
-  optionsOf: (p) => ({ style: p.style, order: p.order, lidOn: p.lidOn ?? 'first', glueSide: p.glueSide }),
-  withOptions: (p, o) => ({
-    ...p,
-    style: (o.style ?? p.style) as TuckParams['style'],
-    order: (o.order ?? p.order) as TuckParams['order'],
-    lidOn: (o.lidOn ?? p.lidOn) as TuckParams['lidOn'],
-    glueSide: (o.glueSide ?? p.glueSide) as TuckParams['glueSide'],
-  }),
+  // The picture decides: the user reads which column the top lid stands on and
+  // whether the bottom lid hangs off the same column or the one opposite.
+  // Panel order (wide first or narrow first) follows from the lid column.
+  options: (p) => {
+    const top = topLidPanel(p)
+    const opposite = ((top + 1) % 4) + 1
+    return [
+      {
+        key: 'topLid',
+        label: 'Top lid on',
+        choices: [1, 2, 3, 4].map((n) => ({ value: String(n), label: `Panel ${n}` })),
+      },
+      {
+        key: 'style',
+        label: 'Bottom lid on',
+        choices: [
+          { value: 'reverse', label: `Panel ${opposite} (reverse)` },
+          { value: 'straight', label: `Panel ${top} (straight)` },
+        ],
+      },
+      {
+        key: 'glueSide',
+        label: 'Glue flap',
+        choices: [
+          { value: 'left', label: 'Left' },
+          { value: 'right', label: 'Right' },
+        ],
+      },
+    ]
+  },
+  optionsOf: (p) => ({ topLid: String(topLidPanel(p)), style: p.style, glueSide: p.glueSide }),
+  withOptions: (p, o) => {
+    // 'topLid' (1..4) is the wizard's toggle; 'order' / 'lidOn' are the
+    // builder's own params (the initial guess sets those directly).
+    const lid = o.topLid ? Number(o.topLid) - 1 : -1
+    return {
+      ...p,
+      style: (o.style ?? p.style) as TuckParams['style'],
+      order: lid >= 0 ? (lid % 2 === 0 ? 'front-first' : 'side-first') : ((o.order ?? p.order) as TuckParams['order']),
+      lidOn: lid >= 0 ? (lid < 2 ? 'first' : 'second') : ((o.lidOn ?? p.lidOn) as TuckParams['lidOn']),
+      glueSide: (o.glueSide ?? p.glueSide) as TuckParams['glueSide'],
+    }
+  },
   glueSide: (p) => p.glueSide,
   wideFirst: (p) => p.order === 'front-first',
   build: (p) => buildTuckBox(p),

@@ -432,7 +432,7 @@ const kitty = await page.evaluate(async (pdfTextSrc) => {
 await savePdf('v13-kitty-118.pdf')
 await foldedShot('v13-kitty-folded.png')
 const kittyOk =
-  kittyOptions.join() === 'glueSide=left,lidOn=first,order=side-first,style=straight' &&
+  kittyOptions.join() === 'glueSide=left,style=straight,topLid=2' &&
   kitty.params.glueSide === 'left' && kitty.params.style === 'straight' && kitty.pdf.pages === 1
 
 await openWizard(BUTTER)
@@ -477,7 +477,7 @@ const labubu = await page.evaluate(() => {
 await foldedShot('v13-labubu-folded.png')
 const labubuOk =
   labubuErr < 0.015 &&
-  labubuOptions.join() === 'glueSide=left,lidOn=first,order=front-first,style=reverse' &&
+  labubuOptions.join() === 'glueSide=left,style=reverse,topLid=1' &&
   Math.abs(labubu.height / labubu.width - 1.43) < 0.08 &&
   Math.abs(labubu.width / labubu.depth - 1) < 0.05
 

@@ -7,7 +7,7 @@
 // inconsistent sizes still carry their own art. Also: print-DPI / one-Letter-page sizing and the
 // rules-based initial guess from the raster analyzer. Pure (no DOM).
 
-import { ARCHETYPES, COLUMN_GUIDES, type Archetype, type ArchetypeId, type GuidePositions } from './archetypes'
+import { ARCHETYPES, COLUMN_GUIDES, archetypeOptions, type Archetype, type ArchetypeId, type GuidePositions } from './archetypes'
 import { sheetBounds, type Face, type PaperDoc, type Vec2 } from './document'
 import { floodForeground, type DielineImageAnalysis } from './dielineImage'
 import type { OverlayTransform } from './material'
@@ -52,7 +52,16 @@ export interface FitSession {
   params: unknown
   guides: ImageGuides
   heightCm: number
+  /** An end panel drawn folded away (guides above are as dragged). */
+  folded?: FoldedAway
 }
+
+/**
+ * An end panel the picture doesn't draw flat — mockups often show the last
+ * panel and glue flap folded back in perspective. Its column is copied from
+ * its twin (the panel two over) and its art is plain paper.
+ */
+export type FoldedAway = 'none' | 'first' | 'last'
 
 /** Params every archetype shares (used to rescale guesses generically). */
 interface BoxLike {
@@ -295,6 +304,55 @@ export function sharpHeight(g: ImageGuides, dpi = MIN_PRINT_DPI): number {
 }
 
 // ---------------------------------------------------------------------------
+// Folded-away end panel
+
+/**
+ * The guides the box is fitted with when an end panel is folded away: its
+ * column is as wide as its twin's and the glue flap on that end (if any) gets
+ * a typical width. Other guides are unchanged. Needs column guides c0..c4.
+ */
+export function withFoldedAway(g: ImageGuides, folded: FoldedAway | undefined, glueSide: 'left' | 'right'): ImageGuides {
+  if (!folded || folded === 'none' || g.x.c4 === undefined) return g
+  const x = { ...g.x }
+  if (folded === 'last') x.c4 = x.c3 + (x.c2 - x.c1)
+  else x.c0 = x.c1 - (x.c3 - x.c2)
+  const glue = 0.25 * ((x.c4 - x.c0) / 4)
+  if ('glue' in x && folded === 'last' && glueSide === 'right') x.glue = x.c4 + glue
+  if ('glue' in x && folded === 'first' && glueSide === 'left') x.glue = x.c0 - glue
+  return { ...g, x }
+}
+
+/**
+ * The picture's strip (image px, x range) that holds no flat art when an end
+ * panel is folded away — everything past the last drawn column line.
+ */
+export function foldedStrip(g: ImageGuides, folded: FoldedAway | undefined): { x0: number; x1: number } | null {
+  if (!folded || folded === 'none' || g.x.c4 === undefined) return null
+  return folded === 'last' ? { x0: g.x.c3, x1: Infinity } : { x0: -Infinity, x1: g.x.c1 }
+}
+
+/**
+ * Guess whether an end panel is drawn folded away: its column is much
+ * narrower than its twin's and has no flap at either end (a flat end panel
+ * has a lid or dust flaps).
+ */
+export function guessFoldedAway(g: ImageGuides, mask: Uint8Array, w: number, h: number): FoldedAway {
+  if (g.x.c4 === undefined) return 'none'
+  const c = COLUMN_GUIDES.map((id) => g.x[id])
+  const cols = [0, 1, 2, 3].map((i) => c[i + 1] - c[i])
+  const bodyPx = g.y.body0 - g.y.bodyH
+  const flapped = (i: number) => {
+    const inset = cols[i] * 0.2
+    const up = coverage(mask, w, h, c[i] + inset, g.y.bodyH - bodyPx * 0.12, c[i + 1] - inset, g.y.bodyH - bodyPx * 0.03)
+    const dn = coverage(mask, w, h, c[i] + inset, g.y.body0 + bodyPx * 0.03, c[i + 1] - inset, g.y.body0 + bodyPx * 0.12)
+    return Math.max(up, dn) > 0.25
+  }
+  if (cols[3] < cols[1] * 0.7 && !flapped(3)) return 'last'
+  if (cols[0] < cols[2] * 0.7 && !flapped(0)) return 'first'
+  return 'none'
+}
+
+// ---------------------------------------------------------------------------
 // Initial guess
 
 /**
@@ -431,7 +489,7 @@ export function initialFit(
   // ---- Columns.
   const cands = a.vCandidates.map((x) => x * sx)
   const sides: Array<'left' | 'right'> =
-    !lockLayout && arch.options.some((o) => o.key === 'glueSide') ? ['right', 'left'] : [arch.glueSide(prev)]
+    !lockLayout && archetypeOptions(arch, prev).some((o) => o.key === 'glueSide') ? ['right', 'left'] : [arch.glueSide(prev)]
   let cols: ColumnGuess | null = null
   let side = arch.glueSide(prev)
   // Image evidence for a column strip: the flaps just above / below a real
@@ -476,6 +534,23 @@ export function initialFit(
     const ch = box.y1 - box.y0
     body = { top: box.y0 + ch * 0.22, bottom: box.y1 - ch * 0.22 }
   }
+  // A tuck box's body is the band where the drawing spans its full width; the
+  // rows above and below hold only the lid and dust flaps, with gaps between.
+  // The strongest edges can sit at a flap's tip instead (a dust flap's top edge
+  // across a plain panel), so a body edge in rows that aren't full width moves
+  // in to the band's edge — onto a detected line there, if one is close.
+  if (mask && archId === 'tuck') {
+    const band = fullWidthBand(mask, imgW, imgH, box)
+    const ch = box.y1 - box.y0
+    const snap = (y: number) => {
+      const near = a.hCandidates.map((c) => c * sy).filter((c) => Math.abs(c - y) < ch * 0.015)
+      return near.length ? near.reduce((m, c) => (Math.abs(c - y) < Math.abs(m - y) ? c : m)) : y
+    }
+    if (band && band.bottom - band.top >= ch * 0.35) {
+      if (band.top - body.top > ch * 0.02) body.top = snap(band.top)
+      if (body.bottom - band.bottom > ch * 0.02) body.bottom = snap(band.bottom)
+    }
+  }
 
   // ---- Rows: the archetype's proportions at the detected scale, outermost
   // rows snapped to the drawing's extent, inner ones to nearby detected lines.
@@ -509,33 +584,64 @@ export function initialFit(
   COLUMN_GUIDES.forEach((id, i) => (xs[id] = cols!.lines[i]))
   const guides: ImageGuides = { x: xs, y: ys }
 
-  // ---- Lids: which panels have a flap reaching well past dust-flap length
-  // above / below the body. A lid spans the depth — the width of the panels
-  // beside it — so each column is tested against its neighbours' width. The
-  // lid panels are the builder's "wide" panels, so they also settle the panel
-  // order when the columns are (nearly) equal width.
-  if (mask && !lockLayout && arch.options.some((o) => o.key === 'lidOn')) {
+  // ---- Lids. Each end of a tuck box has the lid on one panel, a dust flap
+  // on each neighbour and nothing on the panel opposite, so an end whose one
+  // bare panel faces a flap names its lid column. Failing that, a flap clearly
+  // longer than the rest is the lid. An end that stays ambiguous (a bare
+  // panel on both sides, e.g. the last panel drawn folded away) follows the
+  // other end: straight if the lid panel has a flap there too, else reverse.
+  // The lid panels are the builder's "wide" panels, so this also settles the
+  // panel order.
+  if (mask && !lockLayout && archetypeOptions(arch, params).some((o) => o.key === 'topLid')) {
     const l = cols.lines
     const colW = [0, 1, 2, 3].map((i) => l[i + 1] - l[i])
-    const cov = (i: number, y0: number, y1: number) => {
+    const meanW = (l[4] - l[0]) / 4
+    const bodyPx = body.bottom - body.top
+    /** How far column i's flap reaches past the body edge (dir −1 = up), px. */
+    const flapLen = (i: number, dir: -1 | 1) => {
       const inset = colW[i] * 0.2
-      return coverage(mask, imgW, imgH, l[i] + inset, y0, l[i + 1] - inset, y1)
+      const edge = dir < 0 ? body!.top : body!.bottom
+      const step = Math.max(2, bodyPx * 0.01)
+      const room = dir < 0 ? edge : imgH - edge
+      let reach = 0
+      let miss = 0
+      for (let d = step; d < room; d += step) {
+        const y = edge + dir * d
+        if (coverage(mask, imgW, imgH, l[i] + inset, y, l[i + 1] - inset, y + dir * step) >= 0.4) {
+          reach = d + step
+          miss = 0
+        } else if (++miss > 2) break
+      }
+      return reach
     }
-    const lidLen = (i: number) => (i % 2 ? colW[0] + colW[2] : colW[1] + colW[3]) / 2
-    const top = [0, 1, 2, 3].map((i) => cov(i, body!.top - lidLen(i) * 0.9, body!.top - lidLen(i) * 0.65))
-    const bot = [0, 1, 2, 3].map((i) => cov(i, body!.bottom + lidLen(i) * 0.65, body!.bottom + lidLen(i) * 0.9))
-    const clearMax = (s: number[]) => {
-      const order = [0, 1, 2, 3].sort((a, b) => s[b] - s[a])
-      return s[order[0]] - s[order[1]] > 0.3 ? order[0] : -1
+    const endLid = (len: number[]): { col: number; cands: number[] } => {
+      const bare = len.map((v) => v < meanW * 0.12)
+      const cands = [0, 1, 2, 3].filter((i) => bare[(i + 2) % 4])
+      const flapped = cands.filter((i) => !bare[i])
+      if (flapped.length === 1) return { col: flapped[0], cands }
+      const pool = flapped.length ? flapped : [0, 1, 2, 3]
+      const byLen = [...pool].sort((x, y) => len[y] - len[x])
+      const clear = byLen.length === 1 || len[byLen[0]] >= 1.3 * len[byLen[1]]
+      return { col: clear && len[byLen[0]] > 0 ? byLen[0] : -1, cands }
     }
-    const t = clearMax(top)
-    const b = clearMax(bot)
-    if (t >= 0 && b >= 0 && t % 2 === b % 2) {
-      const wideFirst = t % 2 === 0
+    const topLen = [0, 1, 2, 3].map((i) => flapLen(i, -1))
+    const botLen = [0, 1, 2, 3].map((i) => flapLen(i, 1))
+    const t = endLid(topLen)
+    const b = endLid(botLen)
+    /** The other end's lid, given this end's lid column and the other end's flaps. */
+    const follow = (col: number, other: { cands: number[] }, otherLen: number[]) => {
+      const straight = otherLen[col] >= meanW * 0.12
+      const pick = straight ? col : (col + 2) % 4
+      return other.cands.length && !other.cands.includes(pick) && other.cands.includes((pick + 2) % 4) ? (pick + 2) % 4 : pick
+    }
+    let lids: { top: number; bottom: number } | null = null
+    if (t.col >= 0 && b.col >= 0 && t.col % 2 === b.col % 2) lids = { top: t.col, bottom: b.col }
+    else if (t.col >= 0) lids = { top: t.col, bottom: follow(t.col, b, botLen) }
+    else if (b.col >= 0) lids = { top: follow(b.col, t, topLen), bottom: b.col }
+    if (lids) {
       params = arch.withOptions(params, {
-        order: wideFirst ? 'front-first' : 'side-first',
-        lidOn: t === (wideFirst ? 0 : 1) ? 'first' : 'second',
-        style: t === b ? 'straight' : 'reverse',
+        topLid: String(lids.top + 1),
+        style: lids.top === lids.bottom ? 'straight' : 'reverse',
       })
     }
   }
@@ -558,6 +664,37 @@ export function looksLikeGable(g: ImageGuides, mask: Uint8Array, w: number, h: n
     lowest = Math.min(lowest, band)
   }
   return lowest > 0.6
+}
+
+/**
+ * The run of rows around the widest one where the drawing covers ≥ 90% of
+ * that width inside `box` (a tapered glue flap costs a few %), or null.
+ */
+function fullWidthBand(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  box: { x0: number; x1: number; y0: number; y1: number },
+): { top: number; bottom: number } | null {
+  const xa = Math.max(0, Math.round(box.x0))
+  const xb = Math.min(w, Math.round(box.x1) + 1)
+  const ya = Math.max(0, Math.round(box.y0))
+  const yb = Math.min(h - 1, Math.round(box.y1))
+  if (xb <= xa || yb <= ya) return null
+  const cov = new Int32Array(h)
+  let peak = ya
+  for (let y = ya; y <= yb; y++) {
+    let n = 0
+    for (let x = xa; x < xb; x++) n += mask[y * w + x]
+    cov[y] = n
+    if (n > cov[peak]) peak = y
+  }
+  const t = cov[peak] * 0.9
+  let top = peak
+  let bottom = peak
+  while (top > ya && cov[top - 1] >= t) top--
+  while (bottom < yb && cov[bottom + 1] >= t) bottom++
+  return { top, bottom }
 }
 
 /** The archetype's y-guides (flat) for `p` rescaled to body height `h`. */
