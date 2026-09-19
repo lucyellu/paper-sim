@@ -67,7 +67,7 @@ const dblName = await page.evaluate(() => window.paperSim.store.getState().proje
 const distinct = new Set(Object.values(built).map((b) => b.sig)).size
 for (const b of Object.values(built)) delete b.sig
 const newOk =
-  cardIds.length === 8 &&
+  cardIds.length === 9 &&
   newClosesOnEsc &&
   Object.values(built).every((b) => b.faces > 0) &&
   distinct === cardIds.length &&

@@ -34,6 +34,14 @@ const TEMPLATES: TemplateDef[] = [
     dims: { width: 6, depth: 3, height: 9, style: 'straight', order: 'front-first', glueSide: 'right' },
   },
   {
+    id: 'cross',
+    name: 'Cross box',
+    sub: 'Cube net · 6 × 5 × 6 cm',
+    desc: 'Sides hang off the front; lid, bottom and back run in one strip. The lid tucks into the back.',
+    template: 'crossbox',
+    dims: { width: 6, depth: 5, height: 6 },
+  },
+  {
     id: 'flap',
     name: 'Flap box',
     sub: 'Classic',

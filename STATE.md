@@ -310,8 +310,8 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
     same-kind stacking, 28 hidden-under-cover pairs). Pudding: cross auto-picked, guides
     ±8 px, builds as a crossbox with 5 steps, ≥8 faces registered. Print vs picture:
     median color diff at 5 points per face. verify-v15 adds "Lush still fits as a tuck
-    box". Dev handle `window.paperSimFitBaked` gives the baked picture and mask. Not yet
-    in File › New: v14 pins the card count at 8.
+    box". Dev handle `window.paperSimFitBaked` gives the baked picture and mask.
+  - File › New has a **Cross box** card (6 × 5 × 6 cm), and verify-v14 now expects 9 cards.
 - **2026-09-18** — **Pictures with several drawings (#781 Lush variants, #790 pudding pot).**
   - Prep now finds each separate drawing in the picture: `findPieces`
     (`model/dielineImage.ts`) labels the islands of the flood mask, 8-connected. Islands
