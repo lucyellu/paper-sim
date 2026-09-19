@@ -98,9 +98,10 @@ export function resolveTuck(p: TuckParams): ResolvedTuck {
   }
 }
 
-type P3 = [number, number, number]
+export type P3 = [number, number, number]
 
-interface Builder {
+/** Shared by the parametric box builders (tuck.ts, crossbox.ts). */
+export interface Builder {
   vertices: Vertex[]
   edges: Edge[]
   faces: Face[]
@@ -125,8 +126,12 @@ function vtx(b: Builder, p: Vec2, t: P3): number {
   return id
 }
 
+export function newBuilder(): Builder {
+  return { vertices: [], edges: [], faces: [], vertexByKey: new Map(), edgeByKey: new Map(), nextId: 0, target3: new Map() }
+}
+
 /** Add a CCW polygon face. kinds[i] is the kind of the edge pts[i] -> pts[i+1]. */
-function addPoly(b: Builder, name: string, pts: Array<{ p: Vec2; t: P3 }>, kinds: EdgeKind[]): number {
+export function addPoly(b: Builder, name: string, pts: Array<{ p: Vec2; t: P3 }>, kinds: EdgeKind[]): number {
   const vids = pts.map(({ p, t }) => vtx(b, p, t))
   const n = vids.length
   for (let i = 0; i < n; i++) {
@@ -191,15 +196,7 @@ export function buildTuckBox(params: TuckParams = defaultTuckParams()): PaperDoc
     return [t[0], y0 + dir * w, t[2]]
   }
 
-  const b: Builder = {
-    vertices: [],
-    edges: [],
-    faces: [],
-    vertexByKey: new Map(),
-    edgeByKey: new Map(),
-    nextId: 0,
-    target3: new Map(),
-  }
+  const b = newBuilder()
   const glueCol = params.glueSide === 'right' ? 3 : 0
   let rootFaceId = -1
 

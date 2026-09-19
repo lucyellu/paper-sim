@@ -1,25 +1,35 @@
 // "Fit the grid" dieline-image wizard. Prep: rotate / flip / crop the picture
-// (baked to a new image every later step uses). Fit: pick the box archetype
-// and layout, then drag the archetype's guide lines (column + row folds) onto
-// the picture while its real outline is drawn over it — the check-before-you-
-// print moment. Size: one real body height; presets for one Letter page and
+// (baked to a new image every later step uses); when the picture holds several
+// drawings, each one is outlined and a click picks it. Fit: pick the box
+// archetype and layout, then drag the archetype's guide lines (column + row
+// folds) onto the picture while its real outline is drawn over it — the
+// check-before-you-print moment. Size: one real body height; presets for one Letter page and
 // for a sharp (≥150 dpi) print. Build: the archetype's parametric dieline with
 // the picture registered onto it through the same guides. Geometry always
 // comes from the builder; the picture supplies measurements and artwork.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ARCHETYPES, ARCHETYPE_IDS, COLUMN_GUIDES, type ArchetypeId } from '../model/archetypes'
-import { analyzeDielineImage, type DielineImageAnalysis } from '../model/dielineImage'
+import { ARCHETYPES, ARCHETYPE_IDS, type ArchetypeId } from '../model/archetypes'
+import {
+  analyzeDielineImage,
+  findPieces,
+  isolateLargestPiece,
+  type DielineImageAnalysis,
+  type Piece,
+} from '../model/dielineImage'
 import {
   artDpi,
+  faceImageMaps,
+  faceRegistration,
   fitLetterHeight,
+  fitPlacement,
   fitParams,
-  flatToImage,
   foregroundMask,
   initialFit,
+  looksLikeCross,
   looksLikeGable,
   MIN_PRINT_DPI,
-  overlayForFit,
+  overlayFromMap,
   sharpHeight,
   sheetSize,
   type CropRect,
@@ -36,6 +46,8 @@ const VIEW_W = 720
 const VIEW_H = 620
 const GUIDE_HIT = 7 // display px
 const HANDLE_HIT = 11
+const PIECE_MAX = 800 // px, piece detection resolution
+const CLICK_SLOP = 4 // display px: a shorter drag is a click
 
 type Step = 'prep' | 'fit'
 type Rotation = FitSession['rotation']
@@ -48,6 +60,7 @@ interface Baked {
   el: HTMLImageElement
   analysis: DielineImageAnalysis
   mask: Uint8Array
+  pixels: Uint8ClampedArray
 }
 
 export interface FitDielineProps {
@@ -58,8 +71,44 @@ export interface FitDielineProps {
   onClose: () => void
 }
 
-/** Draw the picture rotated / flipped, then cropped. */
-function bake(img: HTMLImageElement, rotation: Rotation, flipH: boolean, crop: CropRect | null): HTMLCanvasElement {
+/** A copy of `src` whose longer side is at most `max` px. */
+function downscaled(src: HTMLCanvasElement, max: number): HTMLCanvasElement {
+  const s = Math.min(1, max / Math.max(src.width, src.height, 1))
+  const c = document.createElement('canvas')
+  c.width = Math.max(2, Math.round(src.width * s))
+  c.height = Math.max(2, Math.round(src.height * s))
+  c.getContext('2d')!.drawImage(src, 0, 0, c.width, c.height)
+  return c
+}
+
+const pixels = (c: HTMLCanvasElement) => c.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, c.width, c.height)
+
+/** The separate drawings in `src`, biggest first, in `src` px. */
+function detectPieces(src: HTMLCanvasElement): Piece[] {
+  const low = downscaled(src, PIECE_MAX)
+  const k = src.width / low.width
+  return findPieces(pixels(low)).pieces.map((p) => ({ ...p, x: p.x * k, y: p.y * k, w: p.w * k, h: p.h * k }))
+}
+
+/** Crop around a piece with a small margin, inside the picture. */
+function pieceCrop(p: Piece, w: number, h: number): CropRect {
+  const m = Math.max(4, Math.max(p.w, p.h) * 0.015)
+  const x = Math.max(0, Math.floor(p.x - m))
+  const y = Math.max(0, Math.floor(p.y - m))
+  return { x, y, w: Math.min(w, Math.ceil(p.x + p.w + m)) - x, h: Math.min(h, Math.ceil(p.y + p.h + m)) - y }
+}
+
+/**
+ * Draw the picture rotated / flipped, then cropped; `isolate` then paints
+ * everything but the crop's biggest drawing with the background.
+ */
+function bake(
+  img: HTMLImageElement,
+  rotation: Rotation,
+  flipH: boolean,
+  crop: CropRect | null,
+  isolate = false,
+): HTMLCanvasElement {
   const quarter = rotation === 90 || rotation === 270
   const rw = quarter ? img.height : img.width
   const rh = quarter ? img.width : img.height
@@ -76,6 +125,10 @@ function bake(img: HTMLImageElement, rotation: Rotation, flipH: boolean, crop: C
   c.width = Math.max(1, Math.round(crop.w))
   c.height = Math.max(1, Math.round(crop.h))
   c.getContext('2d')!.drawImage(r, -Math.round(crop.x), -Math.round(crop.y))
+  if (isolate) {
+    const full = pixels(c)
+    if (isolateLargestPiece(full, pixels(downscaled(c, PIECE_MAX)))) c.getContext('2d')!.putImageData(full, 0, 0)
+  }
   return c
 }
 
@@ -87,6 +140,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   const [rotation, setRotation] = useState<Rotation>(session?.rotation ?? 0)
   const [flipH, setFlipH] = useState(session?.flipH ?? false)
   const [crop, setCrop] = useState<CropRect | null>(session?.crop ?? null)
+  const [isolate, setIsolate] = useState(session?.isolate ?? false)
   const [baked, setBaked] = useState<Baked | null>(null)
   const [archId, setArchId] = useState<ArchetypeId>(session?.archetype ?? 'tuck')
   const [paramsBy, setParamsBy] = useState<Partial<Record<ArchetypeId, unknown>>>(
@@ -102,7 +156,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   const prepRef = useRef<HTMLCanvasElement>(null)
   const fitRef = useRef<HTMLCanvasElement>(null)
   const dragRef = useRef<
-    | { kind: 'crop'; x0: number; y0: number }
+    | { kind: 'crop'; x0: number; y0: number; sx: number; sy: number; moved: boolean }
     | { kind: 'x' | 'y'; id: string }
     | { kind: 'move'; last: { x: number; y: number } }
     | { kind: 'scale'; anchor: { x: number; y: number }; start: number; guides: ImageGuides }
@@ -132,7 +186,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     if (!guides) return null
     const { params: p, mismatch } = fitParams(arch, guides, heightCm, params)
     const doc = arch.build(p)
-    return { params: p, mismatch, doc, sheet: sheetSize(doc) }
+    return { params: p, mismatch, doc, sheet: sheetSize(doc), maps: faceImageMaps(arch, p, doc, guides) }
   }, [arch, guides, heightCm, params])
   const dpi = guides ? artDpi(guides, heightCm) : 0
   // The print canvas caps the art resolution too (≈4096 px across the sheet).
@@ -142,6 +196,21 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
   // ---- Prep -----------------------------------------------------------------
   const rotated = useMemo(() => (srcImg ? bake(srcImg, rotation, flipH, null) : null), [srcImg, rotation, flipH])
   const prepScale = rotated ? Math.min(VIEW_W / rotated.width, VIEW_H / rotated.height) : 1
+  const pieces = useMemo(() => (rotated ? detectPieces(rotated) : []), [rotated])
+  const picked =
+    isolate && crop && rotated ? pieces.findIndex((p) => sameRect(crop, pieceCrop(p, rotated.width, rotated.height))) : -1
+
+  // Several drawings: start on the biggest (usually the dieline); a click picks another.
+  useEffect(() => {
+    if (session || !rotated || pieces.length < 2) return
+    pickPiece(pieces[0])
+  }, [pieces])
+
+  function pickPiece(p: Piece) {
+    if (!rotated) return
+    setCrop(pieceCrop(p, rotated.width, rotated.height))
+    setIsolate(true)
+  }
 
   useEffect(() => {
     const c = prepRef.current
@@ -150,6 +219,21 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     c.height = Math.round(rotated.height * prepScale)
     const ctx = c.getContext('2d')!
     ctx.drawImage(rotated, 0, 0, c.width, c.height)
+    if (pieces.length > 1) {
+      ctx.font = 'bold 12px system-ui, sans-serif'
+      pieces.forEach((p, i) => {
+        const [x, y, w, h] = [p.x, p.y, p.w, p.h].map((v) => v * prepScale)
+        ctx.setLineDash([4, 3])
+        ctx.lineWidth = 1.5
+        ctx.strokeStyle = 'rgba(8,145,178,0.9)'
+        ctx.strokeRect(x, y, w, h)
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(8,145,178,0.95)'
+        ctx.fillRect(x, y, 20, 17)
+        ctx.fillStyle = '#fff'
+        ctx.fillText(String(i + 1), x + (i < 9 ? 6 : 2), y + 13)
+      })
+    }
     if (crop) {
       const [x, y, w, h] = [crop.x, crop.y, crop.w, crop.h].map((v) => v * prepScale)
       ctx.fillStyle = 'rgba(0,0,0,0.45)'
@@ -163,37 +247,46 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
       ctx.strokeRect(x, y, w, h)
       ctx.setLineDash([])
     }
-  }, [step, rotated, prepScale, crop])
+  }, [step, rotated, prepScale, crop, pieces])
 
   function rotate(delta: 90 | -90) {
     setRotation((((rotation + delta + 360) % 360) as Rotation))
+    clearCrop()
+  }
+
+  function clearCrop() {
     setCrop(null)
+    setIsolate(false)
   }
 
   async function makeBaked(guess: boolean) {
     if (!srcImg) return
     setBusy(true)
     try {
-      const canvas = bake(srcImg, rotation, flipH, crop)
+      const canvas = bake(srcImg, rotation, flipH, crop, isolate && !!crop)
       const url = canvas.toDataURL('image/png')
       const el = await loadImage(url)
       const analysis = await analyzeDielineImage(url)
       const id = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height)
       const mask = foregroundMask({ width: id.width, height: id.height, data: id.data })
-      const b: Baked = { url, w: canvas.width, h: canvas.height, el, analysis, mask }
+      const b: Baked = { url, w: canvas.width, h: canvas.height, el, analysis, mask, pixels: id.data }
       setBaked(b)
+      // Dev-only handle for scripted checks (scripts/verify*.mjs).
+      if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).paperSimFitBaked = b
       if (guess) {
         // Fresh guesses for every archetype; start on the one that fits best.
         const nextParams: Partial<Record<ArchetypeId, unknown>> = {}
         const nextGuides: Partial<Record<ArchetypeId, ImageGuides>> = {}
         for (const aid of ARCHETYPE_IDS) {
-          const f = initialFit(aid, ARCHETYPES[aid].defaults, analysis, b.w, b.h, mask)
+          const f = initialFit(aid, ARCHETYPES[aid].defaults, analysis, b.w, b.h, mask, false, id.data)
           nextParams[aid] = f.params
           nextGuides[aid] = f.guides
         }
         setParamsBy(nextParams)
         setGuidesBy(nextGuides)
-        setArchId(looksLikeGable(nextGuides.tuck!, mask, b.w, b.h) ? 'gable' : 'tuck')
+        setArchId(
+          looksLikeCross(mask, b.w, b.h) ? 'cross' : looksLikeGable(nextGuides.tuck!, mask, b.w, b.h) ? 'gable' : 'tuck',
+        )
         setSizeMode('fit')
       }
       setStep('fit')
@@ -206,7 +299,17 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
 
   // ---- Fit canvas -------------------------------------------------------------
   const fitScale = baked ? Math.min(VIEW_W / baked.w, VIEW_H / baked.h) : 1
-  const yOrder = useMemo(() => arch.guides(params).y.sort((a, b) => b.pos - a.pos).map((q) => q.id), [arch, params])
+  // Guides that keep their order while dragged: every x-guide in one chain
+  // (left to right); y-guides top to bottom within each of the archetype's groups.
+  const chains = useMemo(() => {
+    const gs = arch.guides(params)
+    const flatY = Object.fromEntries(gs.y.map((q) => [q.id, q.pos]))
+    const groups = arch.yGroups ?? [gs.y.map((q) => q.id)]
+    return {
+      x: [...gs.x].sort((a, b) => a.pos - b.pos).map((q) => q.id),
+      y: groups.map((ids) => [...ids].sort((a, b) => flatY[b] - flatY[a])),
+    }
+  }, [arch, params])
   const yLabels = useMemo(() => Object.fromEntries(arch.guides(params).y.map((q) => [q.id, q.label])), [arch, params])
 
   useEffect(() => {
@@ -220,22 +323,28 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     ctx.fillStyle = 'rgba(255,255,255,0.18)'
     ctx.fillRect(0, 0, c.width, c.height)
 
-    // The archetype's dieline, mapped through the guides.
-    const toImg = flatToImage(guides, heightCm)
-    const pos = new Map(fitted.doc.vertices.map((v) => [v.id, toImg(v.pos)]))
-    for (const e of fitted.doc.edges) {
-      const a = pos.get(e.v1)!
-      const b = pos.get(e.v2)!
-      ctx.beginPath()
-      ctx.moveTo(a.x * s, a.y * s)
-      ctx.lineTo(b.x * s, b.y * s)
-      ctx.setLineDash(e.kind === 'cut' ? [] : [5, 4])
-      ctx.lineWidth = 3.5
-      ctx.strokeStyle = 'rgba(255,255,255,0.9)'
-      ctx.stroke()
-      ctx.lineWidth = 1.6
-      ctx.strokeStyle = e.kind === 'cut' ? '#111' : '#2563eb'
-      ctx.stroke()
+    // The archetype's dieline: each face drawn where its art comes from.
+    const pos = new Map(fitted.doc.vertices.map((v) => [v.id, v.pos]))
+    const kindOf = new Map(fitted.doc.edges.map((e) => [Math.min(e.v1, e.v2) + ':' + Math.max(e.v1, e.v2), e.kind]))
+    for (const face of fitted.doc.faces) {
+      const m = fitted.maps.get(face.id)!
+      const pts = face.vertexIds.map((id) => ({ x: m.ax * pos.get(id)!.x + m.bx, y: m.ay * pos.get(id)!.y + m.by }))
+      face.vertexIds.forEach((v1, i) => {
+        const v2 = face.vertexIds[(i + 1) % face.vertexIds.length]
+        const kind = kindOf.get(Math.min(v1, v2) + ':' + Math.max(v1, v2))
+        const a = pts[i]
+        const b = pts[(i + 1) % pts.length]
+        ctx.beginPath()
+        ctx.moveTo(a.x * s, a.y * s)
+        ctx.lineTo(b.x * s, b.y * s)
+        ctx.setLineDash(kind === 'cut' ? [] : [5, 4])
+        ctx.lineWidth = 3.5
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+        ctx.stroke()
+        ctx.lineWidth = 1.6
+        ctx.strokeStyle = kind === 'cut' ? '#111' : '#2563eb'
+        ctx.stroke()
+      })
     }
     ctx.setLineDash([])
 
@@ -259,8 +368,10 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
       ctx.lineTo(c.width, y * s)
       ctx.stroke()
       ctx.fillStyle = ctx.strokeStyle
-      ctx.fillRect(0, y * s - 4, 10, 8)
-      ctx.fillText(yLabels[id] ?? id, 13, y * s - 3)
+      const right = chains.y.findIndex((g) => g.includes(id)) > 0
+      const label = yLabels[id] ?? id
+      ctx.fillRect(right ? c.width - 10 : 0, y * s - 4, 10, 8)
+      ctx.fillText(label, right ? c.width - 13 - ctx.measureText(label).width : 13, y * s - 3)
     }
 
     // Whole-grid handles: move (circle, body center) and scale (square, body corner).
@@ -275,7 +386,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     ctx.stroke()
     ctx.fillRect(sc.x * s - 7, sc.y * s - 7, 14, 14)
     ctx.strokeRect(sc.x * s - 7, sc.y * s - 7, 14, 14)
-  }, [step, baked, guides, fitted, fitScale, heightCm, yLabels])
+  }, [step, baked, guides, fitted, fitScale, heightCm, yLabels, chains])
 
   function setGuides(g: ImageGuides) {
     setGuidesBy((prev) => ({ ...prev, [archId]: g }))
@@ -345,26 +456,28 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     return 'default'
   }
 
-  /** Keep column guides in order (glue stays outside the body). */
-  function clampX(g: ImageGuides, id: string, x: number): number {
+  /** Keep a dragged guide between its neighbours in its chain. */
+  function clampIn(chain: string[], pos: Record<string, number>, id: string, v: number, dir: 1 | -1): number {
+    const i = chain.indexOf(id)
+    if (i < 0) return v
     const gap = 2
-    const order = [...COLUMN_GUIDES] as string[]
-    const glueRight = arch.glueSide(params) === 'right'
-    if (id === 'glue') return glueRight ? Math.max(g.x.c4 + gap, x) : Math.min(g.x.c0 - gap, x)
-    const i = order.indexOf(id)
-    let lo = i > 0 ? g.x[order[i - 1]] + gap : -Infinity
-    let hi = i < order.length - 1 ? g.x[order[i + 1]] - gap : Infinity
-    if (id === 'c4' && glueRight) hi = g.x.glue - gap
-    if (id === 'c0' && !glueRight) lo = g.x.glue + gap
-    return Math.min(hi, Math.max(lo, x))
+    const prev = i > 0 ? pos[chain[i - 1]] : undefined
+    const next = i < chain.length - 1 ? pos[chain[i + 1]] : undefined
+    let lo = -Infinity
+    let hi = Infinity
+    if (prev !== undefined) (dir > 0 ? (lo = prev + gap) : (hi = prev - gap))
+    if (next !== undefined) (dir > 0 ? (hi = next - gap) : (lo = next + gap))
+    return Math.min(hi, Math.max(lo, v))
   }
 
-  /** Keep row guides in their top-to-bottom order. */
+  function clampX(g: ImageGuides, id: string, x: number): number {
+    return clampIn(chains.x, g.x, id, x, 1)
+  }
+
+  /** Rows run top to bottom in the image (flat y descending). */
   function clampY(g: ImageGuides, id: string, y: number): number {
-    const i = yOrder.indexOf(id)
-    const lo = i > 0 ? g.y[yOrder[i - 1]] + 2 : -Infinity
-    const hi = i < yOrder.length - 1 ? g.y[yOrder[i + 1]] - 2 : Infinity
-    return Math.min(hi, Math.max(lo, y))
+    const chain = chains.y.find((c) => c.includes(id))
+    return chain ? clampIn(chain, g.y, id, y, 1) : y
   }
 
   function setOption(key: string, value: string) {
@@ -372,7 +485,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     setParamsBy((prev) => ({ ...prev, [archId]: next }))
     // Glue side / panel order change which strip is which: re-guess columns.
     if (baked && guides && (key === 'glueSide' || key === 'order')) {
-      const f = initialFit(archId, next, baked.analysis, baked.w, baked.h, baked.mask, true)
+      const f = initialFit(archId, next, baked.analysis, baked.w, baked.h, baked.mask, true, baked.pixels)
       setGuides({ x: f.guides.x, y: guides.y })
     }
   }
@@ -383,18 +496,24 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     st.newDocument(arch.template, fitted.params as TemplateDims)
     const doc = useAppStore.getState().doc
     useAppStore.getState().setProjectName(projectNameFromFileName(fileName))
+    // Each panel shows its own part of the picture, even where the picture's
+    // panels disagree with the box's (averaged) sizes.
+    const maps = faceImageMaps(arch, fitted.params, doc, guides)
+    const place = fitPlacement(doc, maps, guides, heightCm)
     useAppStore.getState().setMaterial({
       ...defaultMaterial(),
       baseColor: '#ffffff',
       overlayImage: baked.url,
-      overlayTransform: overlayForFit(doc, guides, heightCm, baked.w, baked.h),
+      overlayTransform: overlayFromMap(doc, place, baked.w, baked.h),
     })
+    useAppStore.getState().setUVEdits(faceRegistration(doc, maps, place))
     useAppStore.getState().setFitSession({
       fileName,
       source: sourceUrl,
       rotation,
       flipH,
       crop,
+      isolate: isolate && !!crop,
       image: baked.url,
       imageW: baked.w,
       imageH: baked.h,
@@ -406,23 +525,46 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
     onClose()
   }
 
-  // ---- Prep pointer: drag a crop rectangle ------------------------------------
+  // ---- Prep pointer: click a drawing, or drag a crop rectangle ----------------
   function onPrepDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!rotated) return
     const p = toImagePx(e, rotated.width, rotated.height)
-    dragRef.current = { kind: 'crop', x0: p.x, y0: p.y }
+    dragRef.current = { kind: 'crop', x0: p.x, y0: p.y, sx: e.clientX, sy: e.clientY, moved: false }
     e.currentTarget.setPointerCapture(e.pointerId)
   }
 
   function onPrepMove(e: React.PointerEvent<HTMLCanvasElement>) {
     const drag = dragRef.current
-    if (!drag || drag.kind !== 'crop' || !rotated) return
+    if (!drag || drag.kind !== 'crop' || !rotated) {
+      if (rotated && !drag) {
+        e.currentTarget.style.cursor = pieceAt(toImagePx(e, rotated.width, rotated.height)) ? 'pointer' : 'crosshair'
+      }
+      return
+    }
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < CLICK_SLOP) return
+    drag.moved = true
+    setIsolate(false)
     const p = toImagePx(e, rotated.width, rotated.height)
     const x = Math.max(0, Math.min(drag.x0, p.x))
     const y = Math.max(0, Math.min(drag.y0, p.y))
     const w = Math.min(rotated.width, Math.max(drag.x0, p.x)) - x
     const h = Math.min(rotated.height, Math.max(drag.y0, p.y)) - y
     setCrop(w > 8 && h > 8 ? { x, y, w, h } : null)
+  }
+
+  function onPrepUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    const drag = dragRef.current
+    dragRef.current = null
+    if (!drag || drag.kind !== 'crop' || drag.moved || !rotated) return
+    const hit = pieceAt(toImagePx(e, rotated.width, rotated.height))
+    if (hit) pickPiece(hit)
+  }
+
+  /** The smallest drawing whose box holds `p` (one can sit in another's notch). */
+  function pieceAt(p: { x: number; y: number }): Piece | null {
+    if (pieces.length < 2) return null
+    const inside = pieces.filter((q) => p.x >= q.x && p.x <= q.x + q.w && p.y >= q.y && p.y <= q.y + q.h)
+    return inside.sort((a, b) => a.w * a.h - b.w * b.h)[0] ?? null
   }
 
   const endDrag = () => {
@@ -440,33 +582,47 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
         {step === 'prep' ? (
           <div className="photo-layout">
             <div className="photo-left">
-              <p className="photo-prompt">Drag a box around the flat dieline (skip if the picture is only the dieline).</p>
+              <p className="photo-prompt">
+                {pieces.length > 1
+                  ? `This picture has ${pieces.length} separate drawings — click the one to fold, or drag your own box.`
+                  : 'Drag a box around the flat dieline (skip if the picture is only the dieline).'}
+              </p>
               <canvas
                 ref={prepRef}
-                className="photo-canvas fit-canvas"
+                className="photo-canvas fit-canvas prep-canvas"
+                data-img-w={rotated?.width}
+                data-pieces={JSON.stringify(pieces.map((p) => [p.x, p.y, p.w, p.h].map(Math.round)))}
+                data-picked={picked}
                 onPointerDown={onPrepDown}
                 onPointerMove={onPrepMove}
-                onPointerUp={endDrag}
+                onPointerUp={onPrepUp}
                 onPointerCancel={endDrag}
               />
             </div>
             <div className="photo-right">
               <p className="hint" style={{ marginTop: 0 }}>
-                Many pins show the flat dieline next to a mockup — crop to just the flat part. Rotate
-                so the body panels stand upright in a row (lids above and below).
+                Many pins show the flat dieline next to a mockup, color variants or other parts —
+                pick or crop just the one to fold. A picked drawing is cleaned up: labels and crop
+                marks around it are painted out. Rotate so the body panels stand upright in a row
+                (lids above and below).
               </p>
+              {picked >= 0 && (
+                <p className="hint" data-testid="picked-piece">
+                  Using drawing {picked + 1} of {pieces.length}.
+                </p>
+              )}
               <div className="btn-row">
                 <button onClick={() => rotate(-90)}>⟲ Rotate left</button>
                 <button onClick={() => rotate(90)}>⟳ Rotate right</button>
                 <button
                   onClick={() => {
                     setFlipH(!flipH)
-                    setCrop(null)
+                    clearCrop()
                   }}
                 >
                   ⇋ Flip
                 </button>
-                <button disabled={!crop} onClick={() => setCrop(null)}>
+                <button disabled={!crop} onClick={clearCrop}>
                   Whole image
                 </button>
               </div>
@@ -529,7 +685,7 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
               {mismatch > 0.08 && (
                 <p className="hint photo-warn" data-testid="fit-mismatch">
                   The picture’s matching panels differ by {Math.round(mismatch * 100)}% — the box uses
-                  their average, so the art can shift a little at the folds.
+                  their average, and each panel’s art is stretched to fill its panel.
                 </p>
               )}
               <div className="import-dims fit-dims">
@@ -600,12 +756,21 @@ export function FitDielineDialog({ source, session, onClose }: FitDielineProps) 
 
 /** Center of the body (whole-grid move handle), image px. */
 function moveHandle(g: ImageGuides) {
-  return { x: (g.x.c0 + g.x.c4) / 2, y: (g.y.bodyH + g.y.body0) / 2 }
+  return { x: (g.x.c0 + bodyRight(g)) / 2, y: (g.y.bodyH + g.y.body0) / 2 }
 }
 
 /** Body bottom-right corner (whole-grid scale handle), image px. */
 function scaleHandle(g: ImageGuides) {
-  return { x: g.x.c4, y: g.y.body0 }
+  return { x: bodyRight(g), y: g.y.body0 }
+}
+
+/** Right edge of the body: the last column line (tuck / gable) or the front's (cross). */
+function bodyRight(g: ImageGuides): number {
+  return g.x.c4 ?? g.x.c1
+}
+
+function sameRect(a: CropRect, b: CropRect): boolean {
+  return Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1 && Math.abs(a.w - b.w) < 1 && Math.abs(a.h - b.h) < 1
 }
 
 function mapGuides(g: ImageGuides, fx: (x: number) => number, fy: (y: number) => number): ImageGuides {

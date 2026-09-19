@@ -12,7 +12,7 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs && node scripts/verify-v13.mjs && node scripts/verify-v14.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs && node scripts/verify-v13.mjs && node scripts/verify-v14.mjs && node scripts/verify-v15.mjs && node scripts/verify-v16.mjs`
    Product direction lives in `VISION.md` (pillars, product ladder, what's parked).
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
@@ -277,6 +277,56 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
   - `check-exports.mjs` / `check-sheet.mjs` drive the dialog now; new
     `verify-v14.mjs` covers menu shape, all 8 templates, export toggles, Esc/Done.
     Full verify suite green.
+- **2026-09-18** — **Cross box + per-panel art registration (#790 pudding pot).**
+  - `model/crossbox.ts`: `buildCrossBox({width, depth, height, tuck?, tab?, dust?, flap?})`,
+    the cube-net layout. The front is the root. The top lid and its tuck go up, and the
+    tuck tucks inside the back. The bottom and back go down, and the back's end tab hems
+    inside the back wall (posed at 178° so the fold direction is unambiguous). The side
+    walls hang off the front, each with top and bottom dust flaps and a back flap that
+    folds in behind the back. Template `'crossbox'` has 5 fold steps. The builder
+    helpers (`newBuilder`, `addPoly`) are now exported from tuck.ts.
+  - Archetype `cross` (`model/archetypes.ts`). Two new optional archetype hooks:
+    `yGroups` (row guides that clamp against each other: the side wall's rows live apart
+    from the center strip's) and `faceScope(faceName)` (which guides register a face). The
+    dialog's guide clamping is now generic: all x-guides are one chain, and y is chained
+    per group. It drops the hard-coded c0..c4/glue logic. Handles use `c4 ?? c1`.
+  - Auto-pick: `looksLikeCross` (a full-height center strip with similar wings on both
+    sides, each well short of the strip) runs before `looksLikeGable`. `initialFit`
+    dispatches to `crossGuides`. That reads columns and extents from the mask, and crease
+    rows where a luminance edge spans most of the panel. The front is the strong line
+    nearest the side wall's creases. On #790 every guide lands within 4 px. The wizard
+    now also passes the baked RGBA into `initialFit`.
+  - **Per-panel registration, all archetypes.** AI-drawn nets disagree with themselves
+    (#790's back is 157 px tall against a 263 px front, and its sides are 272 wide against
+    a 198 lid). `faceImageMaps` maps each face's flat bbox through its scoped guides,
+    piecewise-linear, to its own picture rect. `faceRegistration` turns that into per-face
+    UV edits, so print (`compensateUVs`) and 3D follow automatically. `fitPlacement` keeps
+    the uniform overlay when every face's picture region stays on the sheet (consistent
+    pictures need no edits). Otherwise it stretches the picture's panel area over the
+    sheet. The texture only holds what's on the sheet, so off-sheet art (#790's flap tips)
+    was blank before this. The fit canvas draws each face through its own map. The
+    mismatch hint now says the art is stretched per panel.
+  - `verify-v16.mjs`: cross geometry at 4 proportions (extents, no interpenetration, no
+    same-kind stacking, 28 hidden-under-cover pairs). Pudding: cross auto-picked, guides
+    ±8 px, builds as a crossbox with 5 steps, ≥8 faces registered. Print vs picture:
+    median color diff at 5 points per face. verify-v15 adds "Lush still fits as a tuck
+    box". Dev handle `window.paperSimFitBaked` gives the baked picture and mask. Not yet
+    in File › New: v14 pins the card count at 8.
+- **2026-09-18** — **Pictures with several drawings (#781 Lush variants, #790 pudding pot).**
+  - Prep now finds each separate drawing in the picture: `findPieces`
+    (`model/dielineImage.ts`) labels the islands of the flood mask, 8-connected. Islands
+    count when they are ≥ 1% of the picture and ≥ 8% of the biggest. Captions, swatches,
+    crop marks and divider lines are too small to count.
+  - With 2+ drawings, each gets a numbered outline and the biggest is pre-picked (usually
+    the dieline). A click picks another; a drag still makes a free crop. Picking crops
+    with a 1.5% margin and sets `FitSession.isolate`. `bake` then runs
+    `isolateLargestPiece`: everything but the crop's biggest drawing, plus 2 px, is
+    painted the border's median color. Labels in the dieline's notches and a neighbor's
+    edge are gone before analysis, print and texture. Single-drawing pictures are
+    unchanged: #793/#773/#783/#770/#791 find ≤ 1 drawing.
+  - `verify-v15.mjs`: Lush finds 3, big one picked, click picks a variant, baked size =
+    piece + margin. Pudding: box dieline picked. The five single pictures are untouched.
+  - The pudding box's own layout is handled by the cross box (entry above).
 - **2026-09-18** — **Dieline import fixes from the first real try (#791, Labubu).**
   - *Too-tall box:* the aged-paper background has a dark vignette, which the
     color mask counted as drawing. The drawing box became the whole picture, so

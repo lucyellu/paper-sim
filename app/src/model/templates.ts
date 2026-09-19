@@ -63,6 +63,17 @@ export function templateSteps(template: Template, doc: PaperDoc): Step[] {
       { name: 'Top: close the lid, tuck it in', match: /top (lid|tuck)/ },
     ])
   }
+  if (template === 'crossbox') {
+    // Sides back and their flaps in, then bottom + back up around them, then
+    // the lid over the top dust flaps.
+    return stagedSteps(doc, [
+      { name: 'Fold the sides back', match: /^(left|right) side$/ },
+      { name: 'Side flaps in', match: /side (back flap|bottom dust flap)/ },
+      { name: 'Bottom and back up', match: /^(bottom|back|back tab)$/ },
+      { name: 'Top: dust flaps in', match: /top dust flap/ },
+      { name: 'Top: close the lid, tuck it in', match: /top (lid|tuck)/ },
+    ])
+  }
   return stagedSteps(doc, [
     { name: 'Fold the body square', match: /^(right side|back|left side|glue flap)$/ },
     { name: 'Close the bottom', match: /bottom flap/ },

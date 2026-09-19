@@ -4,6 +4,7 @@ import { buildGableCarton, type GableDims } from '../model/gable'
 import { buildCan, type CanDims } from '../model/can'
 import { buildSleeve, type SleeveDims } from '../model/sleeve'
 import { buildTuckBox, type TuckParams } from '../model/tuck'
+import { buildCrossBox, type CrossParams } from '../model/crossbox'
 import type { FitSession } from '../model/dielineFit'
 import { buildPanelTree, type PanelTree, type PaperDoc } from '../model/document'
 import { fromFoldFile, toFoldFile } from '../model/foldfile'
@@ -53,10 +54,13 @@ export interface Backdrop {
   h: number
   opacity: number
 }
-/** 'tuck' = the legacy fixed-size flap box; 'tuckbox' = the parametric tuck-end box. */
-export type Template = 'tuck' | 'tuckbox' | 'gable' | 'can' | 'sleeve'
+/**
+ * 'tuck' = the legacy fixed-size flap box; 'tuckbox' = the parametric tuck-end box;
+ * 'crossbox' = the parametric cube-net box (sides hang off the front).
+ */
+export type Template = 'tuck' | 'tuckbox' | 'crossbox' | 'gable' | 'can' | 'sleeve'
 /** Optional dimensions when creating a template (rectangular gable, can, sleeve size). */
-export type TemplateDims = GableDims | CanDims | SleeveDims | TuckParams
+export type TemplateDims = GableDims | CanDims | SleeveDims | TuckParams | CrossParams
 /** Which component the pointer selects in the 3D view (Maya-style). */
 export type SelectMode = 'object' | 'face' | 'edge'
 /** Active manipulator (Maya Q/W/E/R): none, translate, rotate, scale. */
@@ -176,6 +180,7 @@ export function buildTemplate(template: Template, dims?: TemplateDims): PaperDoc
   if (template === 'can') return buildCan(dims as CanDims | undefined)
   if (template === 'sleeve') return buildSleeve(dims as SleeveDims | undefined)
   if (template === 'tuckbox') return buildTuckBox(dims as TuckParams | undefined)
+  if (template === 'crossbox') return buildCrossBox(dims as CrossParams | undefined)
   return buildCarton()
 }
 

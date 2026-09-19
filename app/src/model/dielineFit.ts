@@ -2,15 +2,19 @@
 // pixels (what the user drags); a real body height turns them into flat cm
 // (uniform scale, anchored on guides c0 / body0), the archetype turns those
 // into params, and the same mapping registers the image onto the built sheet
-// as an OverlayTransform. Also: print-DPI / one-Letter-page sizing and the
+// as an OverlayTransform. Each face then gets its own registration (per-face
+// UVs) read off the guides that bound it, so panels the picture draws at
+// inconsistent sizes still carry their own art. Also: print-DPI / one-Letter-page sizing and the
 // rules-based initial guess from the raster analyzer. Pure (no DOM).
 
 import { ARCHETYPES, COLUMN_GUIDES, type Archetype, type ArchetypeId, type GuidePositions } from './archetypes'
-import { sheetBounds, type PaperDoc, type Vec2 } from './document'
+import { sheetBounds, type Face, type PaperDoc, type Vec2 } from './document'
 import { floodForeground, type DielineImageAnalysis } from './dielineImage'
 import type { OverlayTransform } from './material'
 import type { RGBAImage } from './photoUnwarp'
 import { fitsOneLetterPage } from './printFit'
+import { faceUVCentroid, pruneUVEdits, type UVEdits } from './uv'
+import { resolveCross, type CrossParams } from './crossbox'
 
 /** Guide positions in image px, by id (x = columns, y = rows; image y grows down). */
 export interface ImageGuides {
@@ -34,6 +38,12 @@ export interface FitSession {
   flipH: boolean
   /** Crop in rotated/flipped-image px; null = whole image. */
   crop: CropRect | null
+  /**
+   * The crop was made by picking one drawing out of several: everything in it
+   * except the biggest drawing (labels, crop marks, a neighbor's edge) is
+   * painted over with the background.
+   */
+  isolate?: boolean
   /** The baked (rotated + flipped + cropped) picture every later step uses. */
   image: string
   imageW: number
@@ -97,16 +107,163 @@ export function overlayForFit(
   imgH: number,
 ): OverlayTransform {
   const k = cmPerPx(g, heightCm)
+  return overlayFromMap(doc, { xa: k, xb: -g.x.c0 * k, ya: -k, yb: g.y.body0 * k }, imgW, imgH)
+}
+
+// ---------------------------------------------------------------------------
+// Per-face registration
+
+/** Image px = a·flat + b, per axis (image y grows down, so ay < 0). */
+export interface FaceImageMap {
+  ax: number
+  bx: number
+  ay: number
+  by: number
+}
+
+/** Piecewise-linear flat → image map through (flat, image) guide pairs; extrapolates the end segments. */
+function piecewise(pairs: Array<[number, number]>): (v: number) => number {
+  const pts = [...pairs].sort((a, b) => a[0] - b[0])
+  if (pts.length === 1) return (v) => pts[0][1] + (v - pts[0][0])
+  return (v) => {
+    let i = 0
+    while (i < pts.length - 2 && v > pts[i + 1][0]) i++
+    const [f0, m0] = pts[i]
+    const [f1, m1] = pts[i + 1]
+    return m0 + ((v - f0) / (f1 - f0 || 1e-9)) * (m1 - m0)
+  }
+}
+
+/**
+ * Where each face's art sits in the picture: its flat bounding box mapped
+ * through the guides in its scope (flat positions from the built params,
+ * picture positions from the dragged guides). Faces between guides land
+ * exactly on their panel in the picture however the panels disagree.
+ */
+export function faceImageMaps(arch: Archetype<unknown>, params: unknown, doc: PaperDoc, g: ImageGuides): Map<number, FaceImageMap> {
+  const flat = arch.guides(params)
+  const flatX = Object.fromEntries(flat.x.map((q) => [q.id, q.pos]))
+  const flatY = Object.fromEntries(flat.y.map((q) => [q.id, q.pos]))
+  const pos = new Map(doc.vertices.map((v) => [v.id, v.pos]))
+  const out = new Map<number, FaceImageMap>()
+  const cache = new Map<string, { fx: (v: number) => number; fy: (v: number) => number }>()
+  for (const face of doc.faces) {
+    const scope = arch.faceScope?.(face.name) ?? { x: Object.keys(flatX), y: Object.keys(flatY) }
+    const key = scope.x.join() + '|' + scope.y.join()
+    let fns = cache.get(key)
+    if (!fns) {
+      const px = scope.x.filter((id) => id in g.x && id in flatX).map((id) => [flatX[id], g.x[id]] as [number, number])
+      const py = scope.y.filter((id) => id in g.y && id in flatY).map((id) => [flatY[id], g.y[id]] as [number, number])
+      fns = { fx: piecewise(px), fy: piecewise(py) }
+      cache.set(key, fns)
+    }
+    const xs = face.vertexIds.map((id) => pos.get(id)!.x)
+    const ys = face.vertexIds.map((id) => pos.get(id)!.y)
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]
+    const ax = (fns.fx(x1) - fns.fx(x0)) / Math.max(x1 - x0, 1e-9)
+    const ay = (fns.fy(y1) - fns.fy(y0)) / Math.max(y1 - y0, 1e-9)
+    out.set(face.id, { ax, bx: fns.fx(x0) - ax * x0, ay, by: fns.fy(y0) - ay * y0 })
+  }
+  return out
+}
+
+/** Image px → flat cm, per axis: X = xa·u + xb, Y = ya·v + yb (ya < 0: image y grows down). */
+export interface ImageToFlat {
+  xa: number
+  xb: number
+  ya: number
+  yb: number
+}
+
+/** The OverlayTransform that places the picture by `m` on the doc's sheet. */
+export function overlayFromMap(doc: PaperDoc, m: ImageToFlat, imgW: number, imgH: number): OverlayTransform {
   const { min, max } = sheetBounds(doc)
   const w = Math.max(max.x - min.x, 1e-6)
   const h = Math.max(max.y - min.y, 1e-6)
+  // buildSheetCanvas draws the overlay rect in canvas space (row 0 = sheet max.y).
   return {
-    offsetX: (-g.x.c0 * k - min.x) / w,
-    offsetY: (max.y - g.y.body0 * k) / h,
-    scaleX: (k * imgW) / w,
-    scaleY: (k * imgH) / h,
+    offsetX: (m.xb - min.x) / w,
+    offsetY: (max.y - m.yb) / h,
+    scaleX: (m.xa * imgW) / w,
+    scaleY: (-m.ya * imgH) / h,
     rotationDeg: 0,
   }
+}
+
+/**
+ * Where the picture goes on the sheet before per-face registration. The
+ * texture only holds what lands on the sheet, and each face can only pull
+ * its art from there — so: the uniform fit (overlayForFit) when it keeps
+ * every face's picture region on the sheet (a consistent picture then needs
+ * no per-face edits), otherwise the picture's panel area stretched over the
+ * whole sheet (panels drawn bigger than the averaged box stay reachable).
+ */
+export function fitPlacement(doc: PaperDoc, maps: Map<number, FaceImageMap>, g: ImageGuides, heightCm: number): ImageToFlat {
+  const k = cmPerPx(g, heightCm)
+  const uniform: ImageToFlat = { xa: k, xb: -g.x.c0 * k, ya: -k, yb: g.y.body0 * k }
+  const { min, max } = sheetBounds(doc)
+  const pos = new Map(doc.vertices.map((v) => [v.id, v.pos]))
+  let u0 = Infinity
+  let u1 = -Infinity
+  let v0 = Infinity
+  let v1 = -Infinity
+  for (const face of doc.faces) {
+    const m = maps.get(face.id)
+    if (!m) continue
+    for (const id of face.vertexIds) {
+      const p = pos.get(id)!
+      const u = m.ax * p.x + m.bx
+      const v = m.ay * p.y + m.by
+      u0 = Math.min(u0, u)
+      u1 = Math.max(u1, u)
+      v0 = Math.min(v0, v)
+      v1 = Math.max(v1, v)
+    }
+  }
+  if (!Number.isFinite(u0)) return uniform
+  const tol = 0.005 * Math.max(max.x - min.x, max.y - min.y)
+  const on =
+    uniform.xa * u0 + uniform.xb >= min.x - tol &&
+    uniform.xa * u1 + uniform.xb <= max.x + tol &&
+    uniform.ya * v1 + uniform.yb >= min.y - tol &&
+    uniform.ya * v0 + uniform.yb <= max.y + tol
+  if (on) return uniform
+  const xa = (max.x - min.x) / Math.max(u1 - u0, 1e-6)
+  const ya = -(max.y - min.y) / Math.max(v1 - v0, 1e-6)
+  return { xa, xb: min.x - xa * u0, ya, yb: max.y - ya * v0 }
+}
+
+/**
+ * Per-face UV edits that make each face sample its own picture region
+ * (faceImageMaps) instead of where the placement `place` (fitPlacement)
+ * puts it. Faces the placement already registers get no edit.
+ */
+export function faceRegistration(doc: PaperDoc, maps: Map<number, FaceImageMap>, place: ImageToFlat): UVEdits {
+  const { min, max } = sheetBounds(doc)
+  const w = Math.max(max.x - min.x, 1e-6)
+  const h = Math.max(max.y - min.y, 1e-6)
+  const edits: UVEdits = {}
+  for (const face of doc.faces as Face[]) {
+    const m = maps.get(face.id)
+    if (!m) continue
+    // Flat point p shows picture pixel (ax·p.x + bx, ay·p.y + by), which the
+    // placement puts at flat (sx·p.x + tx, sy·p.y + ty).
+    const sx = place.xa * m.ax
+    const tx = place.xa * m.bx + place.xb
+    const sy = place.ya * m.ay
+    const ty = place.ya * m.by + place.yb
+    // Already registered by the placement (to float noise): no edit.
+    if (Math.abs(sx - 1) < 1e-4 && Math.abs(sy - 1) < 1e-4 && Math.abs(tx) < 1e-4 && Math.abs(ty) < 1e-4) continue
+    const c = faceUVCentroid(doc, face)
+    edits[face.id] = {
+      du: (sx * min.x + tx - min.x) / w + (sx - 1) * c.u,
+      dv: (sy * min.y + ty - min.y) / h + (sy - 1) * c.v,
+      rotationDeg: 0,
+      scaleU: sx,
+      scaleV: sy,
+    }
+  }
+  return pruneUVEdits(edits)
 }
 
 /** Print resolution of the artwork at this size (image px per inch). */
@@ -246,6 +403,7 @@ function scaleParams<P>(p: P, s: number): P {
  * mask is given — lid placement read off which wide panel has a flap. Falls
  * back to the archetype's default proportions laid into the content box.
  * `lockLayout` keeps the params' glue side / panel order instead of guessing.
+ * `pixels` (RGBA, imgW × imgH) lets the cross box read its crease lines.
  */
 export function initialFit(
   archId: ArchetypeId,
@@ -255,8 +413,13 @@ export function initialFit(
   imgH: number,
   mask?: Uint8Array,
   lockLayout = false,
+  pixels?: Uint8ClampedArray,
 ): { guides: ImageGuides; params: unknown } {
   const arch = ARCHETYPES[archId]
+  if (archId === 'cross') {
+    const guides = crossGuides(prev as CrossParams, imgW, imgH, mask, pixels)
+    return { guides, params: fitParams(arch, guides, (prev as BoxLike).height, prev).params }
+  }
   const sx = imgW / a.imageW
   const sy = imgH / a.imageH
   const box = a.content
@@ -401,4 +564,226 @@ export function looksLikeGable(g: ImageGuides, mask: Uint8Array, w: number, h: n
 function yFlatOf(arch: Archetype<unknown>, p: unknown, h: number): Record<string, number> {
   const scaled = scaleParams(p, h / Math.max(1e-6, (p as BoxLike).height))
   return Object.fromEntries(arch.guides(scaled).y.map((q) => [q.id, q.pos]))
+}
+
+// ---------------------------------------------------------------------------
+// Cross box (cube net): a tall center strip with a side wall hanging off each
+// edge of the front.
+
+interface Box {
+  x0: number
+  x1: number
+  y0: number
+  y1: number
+}
+
+function maskBox(mask: Uint8Array, w: number, h: number): Box | null {
+  let x0 = w
+  let x1 = -1
+  let y0 = h
+  let y1 = -1
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!mask[y * w + x]) continue
+      if (x < x0) x0 = x
+      if (x > x1) x1 = x
+      if (y < y0) y0 = y
+      if (y > y1) y1 = y
+    }
+  }
+  return x1 < 0 ? null : { x0, x1, y0, y1 }
+}
+
+/** Per-column foreground counts and the center strip (the tallest run of columns). */
+function centerStrip(mask: Uint8Array, w: number, h: number) {
+  const col = new Int32Array(w)
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) col[x] += mask[y * w + x]
+  let top = 0
+  for (let x = 1; x < w; x++) if (col[x] > col[top]) top = x
+  const t = col[top] * 0.75
+  let c0 = top
+  let c1 = top
+  while (c0 > 0 && col[c0 - 1] >= t) c0--
+  while (c1 < w - 1 && col[c1 + 1] >= t) c1++
+  return { col, c0, c1: c1 + 1, tall: col[top] }
+}
+
+/**
+ * A cube-net cross: one run of columns spans (nearly) the whole drawing's
+ * height, with wings of similar width on both sides that are much shorter.
+ * (A straight tuck box's full-height lid column has the long body on one
+ * side and only the glue flap or a narrow panel on the other.)
+ */
+export function looksLikeCross(mask: Uint8Array, w: number, h: number): boolean {
+  const box = maskBox(mask, w, h)
+  if (!box) return false
+  const { col, c0, c1, tall } = centerStrip(mask, w, h)
+  const span = box.x1 - box.x0
+  const left = c0 - box.x0
+  const right = box.x1 - c1
+  if (tall < (box.y1 - box.y0) * 0.85 || left < span * 0.2 || right < span * 0.2) return false
+  if (Math.abs(left - right) / Math.max(left, right) > 0.35) return false
+  // Wing height, skipping the anti-aliased columns right at the strip's edges.
+  let wing = 0
+  for (let x = box.x0; x < c0 - left * 0.05; x++) wing = Math.max(wing, col[x])
+  for (let x = Math.ceil(c1 + right * 0.05); x <= box.x1; x++) wing = Math.max(wing, col[x])
+  return wing < tall * 0.6
+}
+
+/** Local maxima of `score` in [a, b] at least `minSep` apart, strongest first. */
+function linePeaks(score: Float32Array, a: number, b: number, minSep: number, min: number): Array<{ y: number; s: number }> {
+  const raw: Array<{ y: number; s: number }> = []
+  for (let y = Math.max(1, a); y <= Math.min(score.length - 2, b); y++) {
+    if (score[y] >= min && score[y] >= score[y - 1] && score[y] >= score[y + 1]) raw.push({ y, s: score[y] })
+  }
+  raw.sort((p, q) => q.s - p.s)
+  const kept: Array<{ y: number; s: number }> = []
+  for (const p of raw) if (kept.every((k) => Math.abs(k.y - p.y) >= minSep)) kept.push(p)
+  return kept
+}
+
+/**
+ * Initial guides for the cross box. Columns and outer extents come from the
+ * foreground mask; crease rows are the rows where a luminance edge runs across
+ * most of the panel's width (dashed creases and color changes do, artwork
+ * mostly doesn't). Without pixels, proportional fallbacks.
+ */
+function crossGuides(p: CrossParams, w: number, h: number, mask?: Uint8Array, pixels?: Uint8ClampedArray): ImageGuides {
+  const m = mask ?? new Uint8Array(w * h).fill(1)
+  const box = maskBox(m, w, h) ?? { x0: 0, x1: w - 1, y0: 0, y1: h - 1 }
+  let { c0, c1 } = centerStrip(m, w, h)
+  if (!mask || c1 - c0 < (box.x1 - box.x0) * 0.1) {
+    // No usable mask: the default proportions across the drawing.
+    const r = resolveCross(p)
+    const tot = r.W + 2 * (r.D + r.FLAP)
+    c0 = box.x0 + ((r.D + r.FLAP) / tot) * (box.x1 - box.x0)
+    c1 = box.x1 - ((r.D + r.FLAP) / tot) * (box.x1 - box.x0)
+  }
+  const lum = new Float32Array(w * h)
+  if (pixels) {
+    for (let i = 0; i < w * h; i++) lum[i] = 0.299 * pixels[i * 4] + 0.587 * pixels[i * 4 + 1] + 0.114 * pixels[i * 4 + 2]
+  }
+  const T = 10
+  const on = (x: number, y: number) => m[y * w + x] === 1
+
+  /** Fraction of columns [xa, xb) drawn in row y. */
+  const rowIn = (y: number, xa: number, xb: number) => {
+    const a = Math.round(xa)
+    const b = Math.round(xb)
+    let n = 0
+    for (let x = a; x < b; x++) n += m[y * w + x]
+    return n / Math.max(1, b - a)
+  }
+  // Strip extent: rows where most of the strip is drawn.
+  let sy0 = box.y0
+  let sy1 = box.y1
+  while (sy0 < sy1 && rowIn(sy0, c0, c1) < 0.5) sy0++
+  while (sy1 > sy0 && rowIn(sy1, c0, c1) < 0.5) sy1--
+  const L = sy1 - sy0
+  // Side extent (dust flap tops / bottoms): rows where either wing is drawn.
+  let ys0 = -1
+  let ys1 = -1
+  for (let y = box.y0; y <= box.y1; y++) {
+    if (Math.max(rowIn(y, box.x0, c0), rowIn(y, c1, box.x1 + 1)) >= 0.15) {
+      if (ys0 < 0) ys0 = y
+      ys1 = y
+    }
+  }
+  if (ys0 < 0) {
+    ys0 = sy0 + L * 0.3
+    ys1 = sy0 + L * 0.6
+  }
+  const Hs = ys1 - ys0
+
+  /** Per row: fraction of the given columns with a vertical luminance edge. */
+  const rowScore = (ranges: Array<[number, number]>) => {
+    const sc = new Float32Array(h)
+    if (!pixels) return sc
+    for (let y = 1; y < h - 1; y++) {
+      let n = 0
+      let e = 0
+      for (const [xa, xb] of ranges) {
+        for (let x = Math.round(xa); x < Math.round(xb); x++) {
+          if (!on(x, y - 1) || !on(x, y + 1)) continue
+          n++
+          if (Math.abs(lum[(y + 1) * w + x] - lum[(y - 1) * w + x]) > T) e++
+        }
+      }
+      sc[y] = n ? e / n : 0
+    }
+    // A 2-px-wide line reads as one peak.
+    const out = new Float32Array(h)
+    for (let y = 1; y < h - 1; y++) out[y] = Math.max(sc[y - 1], sc[y], sc[y + 1])
+    return out
+  }
+  /** Per column in [xa, xb): fraction of rows [ya, yb) with a horizontal luminance edge. */
+  const colScore = (xa: number, xb: number, ya: number, yb: number) => {
+    const sc = new Float32Array(w)
+    if (!pixels) return sc
+    for (let x = Math.max(1, Math.round(xa)); x < Math.min(w - 1, Math.round(xb)); x++) {
+      let n = 0
+      let e = 0
+      for (let y = Math.round(ya); y < Math.round(yb); y++) {
+        if (!on(x - 1, y) || !on(x + 1, y)) continue
+        n++
+        if (Math.abs(lum[y * w + x + 1] - lum[y * w + x - 1]) > T) e++
+      }
+      sc[x] = n ? e / n : 0
+    }
+    const out = new Float32Array(w)
+    for (let x = 1; x < w - 1; x++) out[x] = Math.max(sc[x - 1], sc[x], sc[x + 1])
+    return out
+  }
+  /** The strongest line in [a, b] — or, given `near`, the nearest of the strong ones. */
+  const pick = (sc: Float32Array, a: number, b: number, fallback: number, near?: number) => {
+    const pk = linePeaks(sc, Math.round(Math.min(a, b)), Math.round(Math.max(a, b)), Math.max(3, L * 0.01), 0.35)
+    if (!pk.length) return fallback
+    if (near === undefined) return pk[0].y
+    const strong = pk.filter((q) => q.s >= pk[0].s * 0.7)
+    return strong.reduce((m2, q) => (Math.abs(q.y - near) < Math.abs(m2.y - near) ? q : m2)).y
+  }
+
+  // Side walls vs their outer flaps: a vertical line across the side's middle.
+  const ya = ys0 + Hs * 0.35
+  const yb = ys0 + Hs * 0.65
+  const leftW = c0 - box.x0
+  const rightW = box.x1 - c1
+  const sideL = pick(colScore(box.x0, c0, ya, yb), box.x0 + leftW * 0.03, box.x0 + leftW * 0.5, box.x0 + leftW * 0.18)
+  const sideR = pick(colScore(c1, box.x1, ya, yb), box.x1 - rightW * 0.5, box.x1 - rightW * 0.03, box.x1 - rightW * 0.18)
+
+  // The side walls' top / bottom creases, between their dust flaps.
+  const sideRows = rowScore([
+    [sideL + (c0 - sideL) * 0.15, c0 - (c0 - sideL) * 0.15],
+    [c1 + (sideR - c1) * 0.15, sideR - (sideR - c1) * 0.15],
+  ])
+  const sideTop = pick(sideRows, ys0 + Hs * 0.05, ys0 + Hs * 0.45, ys0 + Hs * 0.2)
+  const sideBot = pick(sideRows, ys0 + Hs * 0.55, ys1 - Hs * 0.05, ys1 - Hs * 0.2)
+  const sideMid = (sideTop + sideBot) / 2
+
+  // Center strip creases. The front is the panel the sides hang off, so its
+  // edges are the strong lines nearest the sides' top / bottom.
+  const inset = (c1 - c0) * 0.06
+  const rows = rowScore([[c0 + inset, c1 - inset]])
+  const lid = pick(rows, sy0 + L * 0.01, sy0 + L * 0.15, sy0 + L * 0.06)
+  const back = pick(rows, sy1 - L * 0.15, sy1 - L * 0.01, sy1 - L * 0.06)
+  const bodyH = pick(rows, lid + L * 0.03, sideMid - L * 0.05, Math.min(sideTop, sideMid - L * 0.1), sideTop)
+  const body0 = pick(rows, sideMid + L * 0.05, back - L * 0.1, Math.max(sideBot, sideMid + L * 0.1), sideBot)
+  const bottom = pick(rows, body0 + L * 0.05, back - L * 0.05, (body0 + back) / 2)
+
+  return {
+    x: { flapL: box.x0, sideL, c0, c1, sideR, flapR: box.x1 + 1 },
+    y: {
+      topTuck: sy0,
+      lid,
+      bodyH,
+      body0,
+      bottom,
+      back,
+      backTab: sy1 + 1,
+      sideDustTop: ys0,
+      sideTop,
+      sideBot,
+      sideDustBot: ys1 + 1,
+    },
+  }
 }

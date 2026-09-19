@@ -514,3 +514,143 @@ function findPeaks(
   kept.sort((a, b) => a.x - b.x)
   return kept
 }
+
+// ---------------------------------------------------------------------------
+// Pieces: many pins show more than one drawing — color variants side by side,
+// a pouch or a mockup next to the box, a legend, crop marks. Each separate
+// drawing is one connected island of the foreground mask; the big islands are
+// the pieces the user can pick from, and small ones (labels, swatches, crop
+// marks, divider lines) are ignored.
+
+interface RGBAImage {
+  width: number
+  height: number
+  data: Uint8ClampedArray | Uint8Array
+}
+
+export interface Piece {
+  /** Bounding box in the analyzed image's px. */
+  x: number
+  y: number
+  w: number
+  h: number
+  /** Island area as a fraction of the whole image. */
+  area: number
+  /** Label value in `PieceMap.labels`. */
+  label: number
+}
+
+export interface PieceMap {
+  width: number
+  height: number
+  /** Per-pixel island label (0 = background). */
+  labels: Int32Array
+  /** Kept pieces, biggest first. */
+  pieces: Piece[]
+}
+
+/**
+ * Split a picture into its separate drawings. Pass a copy downscaled to
+ * ≤ ~1000 px (labels are per pixel). An island counts as a piece when it
+ * covers ≥ `minFrac` of the picture and ≥ `minOfLargest` of the biggest one.
+ */
+export function findPieces(img: RGBAImage, { minFrac = 0.01, minOfLargest = 0.08 } = {}): PieceMap {
+  const W = img.width
+  const H = img.height
+  const mask = floodForeground(img.data, W, H)
+  const labels = new Int32Array(W * H)
+  const queue = new Int32Array(W * H)
+  const found: Piece[] = []
+  let next = 0
+  for (let s = 0; s < W * H; s++) {
+    if (!mask[s] || labels[s]) continue
+    const label = ++next
+    labels[s] = label
+    let head = 0
+    let tail = 0
+    queue[tail++] = s
+    let x0 = W
+    let x1 = -1
+    let y0 = H
+    let y1 = -1
+    while (head < tail) {
+      const j = queue[head++]
+      const x = j % W
+      const y = (j / W) | 0
+      if (x < x0) x0 = x
+      if (x > x1) x1 = x
+      if (y < y0) y0 = y
+      if (y > y1) y1 = y
+      // 8-connected: anti-aliased diagonal outlines stay one island.
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy
+        if (yy < 0 || yy >= H) continue
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx
+          if (xx < 0 || xx >= W) continue
+          const n = yy * W + xx
+          if (mask[n] && !labels[n]) {
+            labels[n] = label
+            queue[tail++] = n
+          }
+        }
+      }
+    }
+    found.push({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1, area: tail / (W * H), label })
+  }
+  found.sort((a, b) => b.area - a.area)
+  const largest = found[0]?.area ?? 0
+  const pieces = found.filter((p) => p.area >= minFrac && p.area >= largest * minOfLargest)
+  return { width: W, height: H, labels, pieces }
+}
+
+/**
+ * Keep only the biggest drawing in `full`: everything outside it (and a
+ * `pad`-px margin at `low`'s scale, so anti-aliased edges survive) is painted
+ * the background color. `low` is the same picture downscaled for
+ * `findPieces`. Returns false (and leaves `full` alone) when no piece is found.
+ */
+export function isolateLargestPiece(full: RGBAImage, low: RGBAImage, pad = 2): boolean {
+  const pm = findPieces(low)
+  const piece = pm.pieces[0]
+  if (!piece) return false
+  const { width: lw, height: lh, labels } = pm
+  const keep = new Uint8Array(lw * lh)
+  for (let y = piece.y; y < piece.y + piece.h; y++) {
+    for (let x = piece.x; x < piece.x + piece.w; x++) {
+      if (labels[y * lw + x] !== piece.label) continue
+      for (let dy = -pad; dy <= pad; dy++) {
+        const yy = y + dy
+        if (yy < 0 || yy >= lh) continue
+        for (let dx = -pad; dx <= pad; dx++) {
+          const xx = x + dx
+          if (xx >= 0 && xx < lw) keep[yy * lw + xx] = 1
+        }
+      }
+    }
+  }
+  // Background = the border's median color (alpha included, so transparent
+  // pictures stay transparent).
+  const border: number[][] = [[], [], [], []]
+  const push = (x: number, y: number) => {
+    const k = (y * lw + x) * 4
+    for (let c = 0; c < 4; c++) border[c].push(low.data[k + c])
+  }
+  for (let x = 0; x < lw; x++) (push(x, 0), push(x, lh - 1))
+  for (let y = 1; y < lh - 1; y++) (push(0, y), push(lw - 1, y))
+  const bg = border.map((v) => v.sort((a, b) => a - b)[v.length >> 1])
+
+  const { width: fw, height: fh, data } = full
+  for (let y = 0; y < fh; y++) {
+    const row = Math.min(lh - 1, Math.floor((y * lh) / fh)) * lw
+    for (let x = 0; x < fw; x++) {
+      if (keep[row + Math.min(lw - 1, Math.floor((x * lw) / fw))]) continue
+      const i = (y * fw + x) * 4
+      data[i] = bg[0]
+      data[i + 1] = bg[1]
+      data[i + 2] = bg[2]
+      data[i + 3] = bg[3]
+    }
+  }
+  return true
+}

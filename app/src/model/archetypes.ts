@@ -4,6 +4,11 @@
 // archetype-agnostic — adding the next box type (egg carton, pillow box…)
 // means adding an entry here, not touching the UI.
 //
+// Each face's artwork is registered through the guides that bound it (see
+// faceScope / dielineFit.faceImageMaps), so a picture whose matching panels
+// disagree — common in AI-drawn and hand-drawn dielines — still puts every
+// panel's art on its own panel.
+//
 // Guide contract (the wizard anchors the image on these): every archetype has
 // x-guide 'c0' at flat x = 0, y-guide 'body0' at flat y = 0 and y-guide
 // 'bodyH' at the body height. All guide positions are flat cm, y up.
@@ -12,8 +17,9 @@ import type { Template } from '../state/store'
 import type { PaperDoc } from './document'
 import { buildGableCarton, resolveDims, type GableDims } from './gable'
 import { buildTuckBox, resolveTuck, type TuckParams } from './tuck'
+import { buildCrossBox, resolveCross, type CrossParams } from './crossbox'
 
-export type ArchetypeId = 'tuck' | 'gable'
+export type ArchetypeId = 'tuck' | 'gable' | 'cross'
 
 export interface Guide {
   id: string
@@ -59,6 +65,17 @@ export interface Archetype<P> {
    * the picture's two wide / two narrow columns are from repeating.
    */
   fromGuides(g: GuidePositions, prev: P): { params: P; mismatch: number }
+  /**
+   * y-guides that must stay in order with each other, one list per group
+   * (default: all of them). Guides in different groups may cross — e.g. a
+   * side wall drawn shorter than the front it hangs off.
+   */
+  yGroups?: string[][]
+  /**
+   * Which guides register a face's artwork (default: all). A face's picture
+   * region is read off these guides only.
+   */
+  faceScope?(faceName: string): { x: string[]; y: string[] }
 }
 
 /** Column guide ids, flat order. */
@@ -226,9 +243,86 @@ const gable: Archetype<GableDims> = {
   },
 }
 
+const CROSS_Y_CENTER = ['topTuck', 'lid', 'bodyH', 'body0', 'bottom', 'back', 'backTab']
+const CROSS_Y_SIDE = ['sideDustTop', 'sideTop', 'sideBot', 'sideDustBot']
+
+const cross: Archetype<CrossParams> = {
+  id: 'cross',
+  label: 'Cross box',
+  template: 'crossbox',
+  defaults: { width: 6, depth: 5, height: 6 },
+  options: [],
+  optionsOf: () => ({}),
+  withOptions: (p) => p,
+  glueSide: () => 'right',
+  wideFirst: () => true,
+  build: (p) => buildCrossBox(p),
+  guides(p) {
+    const { W, D, H, TUCK, TAB, DUST, FLAP } = resolveCross(p)
+    return {
+      x: [
+        { id: 'flapL', label: 'left flap edge', pos: -D - FLAP },
+        { id: 'sideL', label: 'left side | flap', pos: -D },
+        { id: 'c0', label: 'side | front', pos: 0 },
+        { id: 'c1', label: 'front | side', pos: W },
+        { id: 'sideR', label: 'right side | flap', pos: W + D },
+        { id: 'flapR', label: 'right flap edge', pos: W + D + FLAP },
+      ],
+      y: [
+        { id: 'topTuck', label: 'top tuck', pos: H + D + TUCK },
+        { id: 'lid', label: 'lid | tuck', pos: H + D },
+        { id: 'bodyH', label: 'front top', pos: H },
+        { id: 'body0', label: 'front bottom', pos: 0 },
+        { id: 'bottom', label: 'bottom | back', pos: -D },
+        { id: 'back', label: 'back | tab', pos: -D - H },
+        { id: 'backTab', label: 'tab end', pos: -D - H - TAB },
+        { id: 'sideDustTop', label: 'side flap top', pos: H + DUST },
+        { id: 'sideTop', label: 'side top', pos: H },
+        { id: 'sideBot', label: 'side bottom', pos: 0 },
+        { id: 'sideDustBot', label: 'side flap bottom', pos: -DUST },
+      ],
+    }
+  },
+  fromGuides(g, prev) {
+    const x = g.x
+    const y = g.y
+    const width = Math.max(0.1, x.c1 - x.c0)
+    const height = Math.max(0.1, y.bodyH - y.body0)
+    // The lid, the bottom and both sides all span the depth.
+    const depths = [y.lid - y.bodyH, y.body0 - y.bottom, x.c0 - x.sideL, x.sideR - x.c1].map((d) => Math.max(0.1, d))
+    const depth = depths.reduce((a, b) => a + b) / depths.length
+    const rel = (a: number, b: number) => Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b), 1e-9)
+    const mismatch = Math.max(
+      rel(Math.min(...depths), Math.max(...depths)),
+      rel(y.bottom - y.back, height),
+      rel(y.sideTop - y.sideBot, height),
+    )
+    return {
+      params: {
+        ...prev,
+        width,
+        depth,
+        height,
+        tuck: Math.max(0.3, y.topTuck - y.lid),
+        tab: Math.max(0.3, y.back - y.backTab),
+        dust: Math.max(0.3, (y.sideDustTop - y.sideTop + (y.sideBot - y.sideDustBot)) / 2),
+        flap: Math.max(0.3, (x.sideL - x.flapL + (x.flapR - x.sideR)) / 2),
+      },
+      mismatch,
+    }
+  },
+  yGroups: [CROSS_Y_CENTER, CROSS_Y_SIDE],
+  faceScope(name) {
+    if (/^left side/.test(name)) return { x: ['flapL', 'sideL', 'c0'], y: CROSS_Y_SIDE }
+    if (/^right side/.test(name)) return { x: ['c1', 'sideR', 'flapR'], y: CROSS_Y_SIDE }
+    return { x: ['c0', 'c1'], y: CROSS_Y_CENTER }
+  },
+}
+
 export const ARCHETYPES: Record<ArchetypeId, Archetype<unknown>> = {
   tuck: tuck as Archetype<unknown>,
   gable: gable as Archetype<unknown>,
+  cross: cross as Archetype<unknown>,
 }
 
 export const ARCHETYPE_IDS = Object.keys(ARCHETYPES) as ArchetypeId[]
