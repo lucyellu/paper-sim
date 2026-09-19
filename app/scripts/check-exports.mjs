@@ -26,22 +26,44 @@ await page.evaluate(() => {
 await page.waitForTimeout(300)
 
 const names = []
-// Exports moved into the top-bar dropdown menus: open the menu, click the item.
-async function grab(menuLabel, itemLabel) {
+// Exports live in the File › Export… dialog: open it (once), pick toggles, click.
+async function openExport() {
+  if (await page.locator('.export-modal').count()) return
+  await page.click('.topbar .menu-label:has-text("File")')
+  await page.click('.menu-item:has-text("Export…")')
+  await page.waitForSelector('.export-modal')
+}
+async function grabWith(action) {
   const dl = page.waitForEvent('download', { timeout: 20000 })
-  await page.click(`.topbar .menu-label:has-text("${menuLabel}")`)
-  await page.click(`.menu-item:has-text("${itemLabel}")`)
+  await action()
   const d = await dl
   names.push(d.suggestedFilename())
   return d
 }
+async function grabDieline(format) {
+  await openExport()
+  await page.click(`[data-seg="dieline-format"] [data-value="${format}"]`)
+  return grabWith(() => page.click('[data-export="dieline"]'))
+}
+async function grabExport(id) {
+  await openExport()
+  return grabWith(() => page.click(`[data-export="${id}"]`))
+}
+async function closeExport() {
+  await page.click('.export-modal button:has-text("Done")')
+}
 
-await grab('Export', 'Dieline SVG (line art)')
-await grab('Export', 'Dieline SVG (line art)') // second export must iterate, not overwrite
-const pdfDl = await grab('Export', 'Dieline PDF (line art)')
-const instrPdfDl = await grab('Export', 'Instructions PDF')
-await grab('File', 'Save (.fold)')
-const zipDl = await grab('Export', 'Project bundle (zip)')
+await grabDieline('svg')
+await grabDieline('svg') // second export must iterate, not overwrite
+const pdfDl = await grabDieline('pdf')
+const instrPdfDl = await grabExport('instructions-pdf')
+await closeExport()
+await grabWith(async () => {
+  await page.click('.topbar .menu-label:has-text("File")')
+  await page.click('.menu-item:has-text("Save (.fold)")')
+})
+const zipDl = await grabExport('bundle')
+await closeExport()
 const zipPath = await zipDl.path()
 
 const pdfMagic = readFileSync(await pdfDl.path()).slice(0, 5).toString() === '%PDF-'

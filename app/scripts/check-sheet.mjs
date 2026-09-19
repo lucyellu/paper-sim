@@ -26,10 +26,11 @@ await page.evaluate(() => {
 })
 await page.waitForTimeout(500)
 
-// The instruction-sheet export moved into the top-bar Export menu.
+// The instruction sheet is printed from the File › Export… dialog.
 const popupPromise = context.waitForEvent('page', { timeout: 15000 })
-await page.click('.topbar .menu-label:has-text("Export")')
-await page.click('.menu-item:has-text("Instructions (print)")')
+await page.click('.topbar .menu-label:has-text("File")')
+await page.click('.menu-item:has-text("Export…")')
+await page.click('[data-export="instructions-print"]')
 const popup = await popupPromise
 await popup.waitForLoadState('domcontentloaded')
 const sheet = await popup.evaluate(() => ({
@@ -39,6 +40,7 @@ const sheet = await popup.evaluate(() => ({
 }))
 await popup.screenshot({ path: 'scripts/shots/v3-instruction-sheet.png', fullPage: true })
 await popup.close()
+await page.click('.export-modal button:has-text("Done")')
 
 // Group fold UI: ctrl-click two gusset panels, press "To target".
 const group = await page.evaluate(() => {

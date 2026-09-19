@@ -1,27 +1,14 @@
-// Maya-style top menu bar: File / Edit / Export dropdowns. The heavy export
-// logic lives in ui/exports.ts and ui/meshExport helpers; this just wires menu
-// items to those and to store actions. Transform tools and select modes live
+// Maya-style top menu bar: File / Edit / Mode dropdowns. File › New… and
+// File › Export… open dialogs (NewDocDialog, ExportDialog) rather than listing
+// every template / format combination. Transform tools and select modes live
 // in the always-visible ViewBar instead of a menu.
 
 import { useEffect, useRef, useState } from 'react'
-import { nextExportName } from '../model/naming'
-import { useAppStore, type AppState, type Template, type TemplateDims } from '../state/store'
-import {
-  dielineArtworkDataUrl,
-  dielinePDF,
-  dielinePDFTrueScale,
-  dielineSVG,
-  dielineTexturePNG,
-  downloadBlob,
-  downloadText,
-  exportProjectBundle,
-  instructionsPDF,
-  openInstructionSheet,
-} from './exports'
-import { materialNeedsTexture } from '../viewer/texture'
+import { useAppStore } from '../state/store'
+import { ExportDialog } from './ExportDialog'
 import { FitDielineDialog, type FitDielineProps } from './FitDielineDialog'
+import { NewDocDialog } from './NewDocDialog'
 import { PhotoCartonDialog } from './PhotoCartonDialog'
-import { exportMesh, type MeshFormat, type MeshPose } from './meshExport'
 
 interface MenuItemDef {
   label: string
@@ -89,6 +76,7 @@ export function TopBar() {
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [fitDialog, setFitDialog] = useState<Pick<FitDielineProps, 'source' | 'session'> | null>(null)
   const [photoDialog, setPhotoDialog] = useState<{ dataUrl: string; fileName: string } | null>(null)
+  const [dialog, setDialog] = useState<'new' | 'export' | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
 
   // Click-away closes any open menu.
@@ -100,10 +88,6 @@ export function TopBar() {
     window.addEventListener('pointerdown', onDown)
     return () => window.removeEventListener('pointerdown', onDown)
   }, [openMenu])
-
-  function newDoc(template: Template, label: string, dims?: TemplateDims) {
-    if (confirm(`Start a new ${label}? Unsaved work will be lost.`)) s.newDocument(template, dims)
-  }
 
   async function onImportImage(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -139,53 +123,10 @@ export function TopBar() {
     }
   }
 
-  function mesh(format: MeshFormat, pose: MeshPose) {
-    exportMesh(useAppStore.getState() as AppState, format, pose).catch((err) =>
-      alert(`Export failed: ${err instanceof Error ? err.message : err}`),
-    )
-  }
-
-  function needSteps(fn: () => boolean) {
-    if (!fn()) alert('Record at least one keyframe first — instructions show one image per step.')
-  }
-
   const fileItems: MenuItemDef[] = [
-    {
-      label: 'New — Tuck box (reverse tuck)',
-      title: 'Parametric tuck-end box: lids on opposite panels, dust flaps on the sides (units = cm)',
-      onClick: () => newDoc('tuckbox', 'tuck box', { width: 6, depth: 3, height: 9, style: 'reverse', order: 'front-first', glueSide: 'right' }),
-    },
-    {
-      label: 'New — Tuck box (straight tuck)',
-      title: 'Parametric tuck-end box with both lids on the same panel (units = cm)',
-      onClick: () => newDoc('tuckbox', 'tuck box', { width: 6, depth: 3, height: 9, style: 'straight', order: 'front-first', glueSide: 'right' }),
-    },
-    { label: 'New — Flap box (classic)', title: 'The original fixed-size box with four top and bottom flaps', onClick: () => newDoc('tuck', 'flap box') },
-    {
-      label: 'New — Milk carton — 1 L (tall)',
-      title:
-        'Tall slim gable carton (~1 litre) — a wider front than sides, the shape most printed drink cartons use (e.g. the strawberry-milk dieline). Units are cm. Add artwork with the dieline editor’s Texture tool.',
-      onClick: () => newDoc('gable', 'milk carton 1L', { width: 5, depth: 3.2, height: 13 }),
-    },
-    {
-      label: 'New — Milk carton — 250 mL (squat)',
-      title:
-        'Small square-base gable carton on the real Pure-Pak 250 mL mini standard: ~57×57 mm base, ~122 mm tall (1 unit = 1 cm). The short school-milk carton, distinct from the tall 1 L one.',
-      onClick: () => newDoc('gable', 'milk carton 250ml', { width: 5.7, depth: 5.7, height: 7.5 }),
-    },
-    { label: 'New — Can label (tube)', title: 'Faceted cylinder — wrap a label around a can', onClick: () => newDoc('can', 'can label') },
-    {
-      label: 'New — Juice box sleeve',
-      title:
-        'Open-ended band that slips over a standard 200 ml juice box (like a phone case for your drink) — print, fold, glue, slide on',
-      onClick: () => newDoc('sleeve', 'juice box sleeve', { width: 5.5, depth: 4.3, height: 7, seam: true }),
-    },
-    {
-      label: 'New — Can sleeve (12 oz)',
-      title:
-        'Faceted band sized to slip over a standard 12 oz drink can — print, fold, glue, slide on',
-      onClick: () => newDoc('can', 'can sleeve', { facets: 24, height: 9, radius: 3.45, seam: true }),
-    },
+    { label: 'New…', onClick: () => setDialog('new'), title: 'Start from a template (tuck box, milk carton, can, sleeve…)' },
+    { label: 'Open…', onClick: () => fileInput.current?.click(), title: 'Open a PaperSim or FOLD file' },
+    { label: 'Save (.fold)', onClick: () => s.saveFile() },
     { label: '', separator: true },
     {
       label: 'Import dieline image…',
@@ -206,8 +147,11 @@ export function TopBar() {
       onClick: () => photoInput.current?.click(),
     },
     { label: '', separator: true },
-    { label: 'Open…', onClick: () => fileInput.current?.click(), title: 'Open a PaperSim or FOLD file' },
-    { label: 'Save (.fold)', onClick: () => s.saveFile() },
+    {
+      label: 'Export…',
+      title: 'Dieline (SVG / PDF / PNG / print-ready 1:1), instructions, 3D mesh, project bundle',
+      onClick: () => setDialog('export'),
+    },
   ]
 
   const editItems: MenuItemDef[] = [
@@ -246,106 +190,10 @@ export function TopBar() {
     },
   ]
 
-  const hasArt = materialNeedsTexture(s.material)
-
-  const exportItems: MenuItemDef[] = [
-    {
-      label: 'Dieline SVG (line art)',
-      onClick: () =>
-        downloadText(dielineSVG(s.doc), nextExportName(s.projectName, 'dieline', 'svg'), 'image/svg+xml'),
-    },
-    {
-      label: 'Dieline PDF (line art)',
-      onClick: () =>
-        dielinePDF(s.doc, s.projectName)
-          .then((pdf) => downloadBlob(pdf, nextExportName(s.projectName, 'dieline', 'pdf')))
-          .catch((e) => alert(`PDF export failed: ${e}`)),
-    },
-    {
-      label: 'Dieline PNG — with artwork',
-      title: hasArt
-        ? 'Flat pattern with the printed design + cut/crease lines'
-        : 'Add a design in the dieline editor (Texture tool) to include artwork',
-      onClick: () =>
-        dielineTexturePNG(s.doc, s.material, s.uvEdits)
-          .then((png) => downloadBlob(png, nextExportName(s.projectName, 'dieline_art', 'png')))
-          .catch((e) => alert(`PNG export failed: ${e}`)),
-    },
-    {
-      label: 'Dieline SVG — with artwork',
-      onClick: () =>
-        dielineArtworkDataUrl(s.doc, s.material, s.uvEdits)
-          .then((url) =>
-            downloadText(
-              dielineSVG(s.doc, url),
-              nextExportName(s.projectName, 'dieline_art', 'svg'),
-              'image/svg+xml',
-            ),
-          )
-          .catch((e) => alert(`SVG export failed: ${e}`)),
-    },
-    {
-      label: 'Dieline PDF — with artwork',
-      onClick: () =>
-        dielinePDF(s.doc, s.projectName, s.material, s.uvEdits)
-          .then((pdf) => downloadBlob(pdf, nextExportName(s.projectName, 'dieline_art', 'pdf')))
-          .catch((e) => alert(`PDF export failed: ${e}`)),
-    },
-    {
-      label: 'Print-ready PDF — true scale 1:1',
-      title: 'Exact physical size (1 unit = 1 cm) — print at 100%; tiles across pages when bigger than A4',
-      onClick: () =>
-        dielinePDFTrueScale(s.doc, s.projectName)
-          .then((pdf) => downloadBlob(pdf, nextExportName(s.projectName, 'dieline_1to1', 'pdf')))
-          .catch((e) => alert(`PDF export failed: ${e}`)),
-    },
-    {
-      label: 'Print-ready PDF — true scale, with artwork',
-      title: hasArt
-        ? 'Exact physical size with the printed design — print at 100%, cut, fold'
-        : 'Add a design in the dieline editor (Texture tool) to include artwork',
-      onClick: () =>
-        dielinePDFTrueScale(s.doc, s.projectName, s.material, s.uvEdits)
-          .then((pdf) => downloadBlob(pdf, nextExportName(s.projectName, 'dieline_art_1to1', 'pdf')))
-          .catch((e) => alert(`PDF export failed: ${e}`)),
-    },
-    {
-      label: 'Instructions (print)',
-      onClick: () => {
-        if (s.steps.length === 0) return needSteps(() => false)
-        void openInstructionSheet(s.doc, s.steps, s.projectName, s.material, s.uvEdits)
-      },
-    },
-    {
-      label: 'Instructions PDF',
-      onClick: () =>
-        instructionsPDF(s.doc, s.steps, s.projectName, s.material, s.uvEdits)
-          .then((pdf) => {
-            if (!pdf) needSteps(() => false)
-            else downloadBlob(pdf, nextExportName(s.projectName, 'instructions', 'pdf'))
-          })
-          .catch((e) => alert(`PDF export failed: ${e}`)),
-    },
-    { label: '', separator: true },
-    { label: '3D mesh — OBJ (folded)', onClick: () => mesh('obj', 'folded'), title: 'Wavefront OBJ + MTL' },
-    { label: '3D mesh — OBJ (flat)', onClick: () => mesh('obj', 'flat') },
-    { label: '3D mesh — GLB (folded)', onClick: () => mesh('glb', 'folded'), title: 'glTF binary (Blender/Roblox)' },
-    { label: '3D mesh — GLB (flat)', onClick: () => mesh('glb', 'flat') },
-    { label: '3D mesh — FBX (folded)', onClick: () => mesh('fbx', 'folded'), title: 'ASCII FBX (Maya)' },
-    { label: '3D mesh — FBX (flat)', onClick: () => mesh('fbx', 'flat') },
-    { label: '', separator: true },
-    {
-      label: 'Project bundle (zip)',
-      onClick: () =>
-        exportProjectBundle(useAppStore.getState() as AppState).catch((e) => alert(`Export failed: ${e}`)),
-    },
-  ]
-
   const menus: Array<[string, MenuItemDef[]]> = [
     ['File', fileItems],
     ['Edit', editItems],
     ['Mode', modeItems],
-    ['Export', exportItems],
   ]
 
   return (
@@ -390,6 +238,20 @@ export function TopBar() {
           onClose={() => setPhotoDialog(null)}
         />
       )}
+      {dialog === 'new' && (
+        <NewDocDialog
+          onClose={() => setDialog(null)}
+          onImportDieline={() => {
+            setDialog(null)
+            imageInput.current?.click()
+          }}
+          onCartonFromPhoto={() => {
+            setDialog(null)
+            photoInput.current?.click()
+          }}
+        />
+      )}
+      {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
       {fitDialog && <FitDielineDialog {...fitDialog} onClose={() => setFitDialog(null)} />}
     </div>
   )

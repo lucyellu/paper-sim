@@ -14,7 +14,7 @@ starts the dev server if it isn't running and opens the app in the browser.
 
 ## Use
 
-- **File → New** — starter dielines: tuck box, milk carton (**1 L tall/slim** or **250 mL squat**
+- **File → New…** — a dialog of starter dielines (with thumbnails): tuck box, milk carton (**1 L tall/slim** or **250 mL squat**
   gable — both real Pure-Pak/Elopak carton sizes; units are cm), and a
   **can label** (faceted cylinder — the label rectangle wraps into a tube via a fan of creases).
   The milk carton is a gable-top with spout gusset creases; every crease carries the target angle
@@ -71,10 +71,10 @@ starts the dev server if it isn't running and opens the app in the browser.
   editor and draw the cut/crease lines over it; the backdrop is a guide, not saved).
 - **Project name** (File section) names your work; fold steps can be renamed in the steps list.
   Exports are numbered per project — `carton_dieline_001.svg`, `_002`, … — so nothing overwrites.
-- **Export** (top menu) — *Dieline SVG / PDF* line art (cuts solid, valley/mountain dashed; PDF is
-  true vector), and *Dieline PNG / SVG / PDF — with artwork* (the printed design composited under
-  the lines); *Instructions* (printable page + PDF) with the dieline plus one numbered 3D snapshot
-  per fold step; **3D mesh — OBJ / GLB / FBX** in folded and flat poses, textured, for
+- **File → Export…** — one dialog: *Dieline* in SVG / PDF / PNG / print-ready 1:1 PDF, with an
+  *Include artwork* toggle; SVG / PDF line art (cuts solid, valley/mountain dashed; PDF is
+  true vector), or with the printed design composited under the lines; *Instructions* (printable page + PDF) with the dieline plus one numbered 3D snapshot
+  per fold step; **3D mesh** — OBJ / GLB / FBX, folded or flat pose, textured, for
   Maya/Blender/Roblox; *Project bundle (zip)* — a `projectname/` folder with the `.fold` (model +
   history), dieline SVG + PDF, a pose snapshot, and the instructions HTML + PDF.
 - **F** frames the selected panel in all views; with nothing selected it frames the whole model.

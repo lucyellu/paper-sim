@@ -171,7 +171,7 @@ export interface AppState {
   loadFile: (json: unknown, fileName: string) => void
 }
 
-function buildTemplate(template: Template, dims?: TemplateDims): PaperDoc {
+export function buildTemplate(template: Template, dims?: TemplateDims): PaperDoc {
   if (template === 'gable') return buildGableCarton(dims as GableDims | undefined)
   if (template === 'can') return buildCan(dims as CanDims | undefined)
   if (template === 'sleeve') return buildSleeve(dims as SleeveDims | undefined)

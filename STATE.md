@@ -12,7 +12,7 @@
 1. Read this file top to bottom (decisions → architecture → roadmap → progress log).
 2. `cd app && npm install && npm run dev` → http://localhost:5173 (`app/README.md` has controls).
 3. Verify the world still works: with the dev server running,
-   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs && node scripts/verify-v13.mjs`
+   `node scripts/verify.mjs && node scripts/verify-gizmo.mjs && node scripts/verify-v2.mjs && node scripts/verify-v3.mjs && node scripts/verify-v4.mjs && node scripts/verify-v5.mjs && node scripts/verify-v6.mjs && node scripts/verify-v7.mjs && node scripts/verify-v8.mjs && node scripts/verify-v9.mjs && node scripts/verify-v10.mjs && node scripts/verify-v11.mjs && node scripts/verify-v12.mjs && node scripts/verify-v13.mjs && node scripts/verify-v14.mjs`
    Product direction lives in `VISION.md` (pillars, product ladder, what's parked).
    (all logic checks should pass with no page errors; screenshots land in `app/scripts/shots/`;
    `PAPERSIM_URL=http://localhost:PORT/` overrides the target if 5173 is taken).
@@ -263,7 +263,21 @@ flattening) → fan group-fold control → rebuild the curved box → then a "ca
 
 *(newest first)*
 
-- **2026-09-18 (latest)** — **Dieline import fixes from the first real try (#791, Labubu).**
+- **2026-09-18 (latest)** — **Top-bar cleanup: File › New… and File › Export… dialogs.**
+  - Menu bar is now File / Edit / Mode. File: New…, Open…, Save, the three
+    picture imports, Export…. The eight "New — …" items became
+    `ui/NewDocDialog.tsx`: a card grid with real dieline thumbnails
+    (`dielineSVG(buildTemplate(...))`; `buildTemplate` is now exported from the
+    store), plus "Start from a picture" buttons. Pick + Create, or double-click.
+  - The 16-item Export menu became `ui/ExportDialog.tsx`: Dieline (Print PDF 1:1 /
+    PDF / SVG / PNG + an Include-artwork toggle; PNG is always with art),
+    Instructions (Print… / PDF), 3D mesh (GLB/OBJ/FBX × folded/flat), Project
+    bundle. It stays open for several exports, shows a status line, and remembers
+    its toggles for the session. Download file names are unchanged.
+  - `check-exports.mjs` / `check-sheet.mjs` drive the dialog now; new
+    `verify-v14.mjs` covers menu shape, all 8 templates, export toggles, Esc/Done.
+    Full verify suite green.
+- **2026-09-18** — **Dieline import fixes from the first real try (#791, Labubu).**
   - *Too-tall box:* the aged-paper background has a dark vignette, which the
     color mask counted as drawing. The drawing box became the whole picture, so
     the body top snapped to the lid top. Masks now come from

@@ -34,7 +34,7 @@ export function Sidebar() {
             }}
           />
         </label>
-        <p className="hint">File &amp; Export live in the top menu bar.</p>
+        <p className="hint">New, Open, Save and Export live in the top File menu.</p>
       </Section>
 
       <Section id="selection" title="Selection">

@@ -63,7 +63,7 @@ See [`app/README.md`](app/README.md) for the full controls reference.
 The engine separates **geometry** (where the fold lines are) from **artwork** (the printed design,
 which rides on top as a texture). To fold a printed dieline like a milk carton:
 
-1. `File → New — Milk carton (tall/rect)` for a typical rectangular carton (or Can label for a tube).
+1. `File → New…` → Milk carton (1 L tall) for a typical rectangular carton (or Can label for a tube).
 2. Open the dieline editor (**✎**) → **Texture** tool → *Add design* and drop in your artwork.
 3. Use the Texture inspector (offset / scale / rotate) to register the art onto the panels.
 4. Press **play** to fold, then **Export** a mesh or instructions.
